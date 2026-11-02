@@ -1,0 +1,26 @@
+{
+  "calibration": [
+    "fx-atk-01",
+    "fx-atk-03",
+    "fx-atk-07",
+    "fx-ben-01",
+    "fx-ben-03",
+    "fx-hb-01"
+  ],
+  "heldout": [
+    "fx-atk-02",
+    "fx-atk-04",
+    "fx-atk-05",
+    "fx-atk-06",
+    "fx-atk-08",
+    "fx-atk-09",
+    "fx-atk-10",
+    "fx-ben-02",
+    "fx-ben-04",
+    "fx-ben-05",
+    "fx-ben-06",
+    "fx-hb-02",
+    "fx-hb-03",
+    "fx-hb-04"
+  ]
+}

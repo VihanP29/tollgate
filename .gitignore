@@ -1,0 +1,46 @@
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+.venv/
+.python-version.local
+
+# Python tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local app state and generated results
+.runtime/
+*.sqlite
+*.sqlite-*
+*.db
+*.log
+evals/results/
+evals/report/*.png
+evals/report/*.md
+evals/*_acceptance.json
+evals/live_agent_smoke.json
+
+docs/*audit*.json
+docs/*replay*.json
+docs/studio-live-acceptance.json
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Build/package outputs
+build/
+dist/
+*.egg-info/
+Tollgate-demo.zip
+SHA256SUMS

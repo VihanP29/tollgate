@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#112b26">
+  <title>Tollgate — Agent authorization</title>
+  <link rel="stylesheet" href="/control.css"><script src="/control.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Tollgate home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>TOLLGATE<span class="brand-divider"></span><span class="brand-sub">CONTROL ROOM</span></a>
+    <div class="top-right"><span class="sandbox">FINANCIAL SANDBOX</span><span class="connection"><i id="connection-dot"></i><span id="connection-text">Connecting</span></span></div>
+  </header>
+  <main>
+    <section class="page-head">
+      <div><div class="eyebrow">NORTHWIND SUPPLY / AGENT OPERATIONS</div><h1>Agent authorization<span class="title-dot">.</span></h1><p>Authorize accounts payable agents. Review exceptions before money moves.</p></div>
+      <div class="head-actions"><a class="button secondary" href="/studio">Policy Studio</a><button class="button secondary" id="policy-lab">Policy lab</button><button class="button secondary" id="challenge" disabled>◇ Challenge gate</button><button class="button secondary" id="new-mandate">＋ New mandate</button><button class="button primary" id="run-agent"><span aria-hidden="true">▶</span> Run agent</button></div>
+    </section>
+    <section class="run-strip" aria-label="Run configuration">
+      <div class="run-identity"><span class="agent-icon" aria-hidden="true">⌘</span><div><strong>Northwind payment agent</strong><span id="run-state">Ready for delegated work</span></div></div>
+      <div class="run-settings"><label for="planner">Agent</label><select id="planner"><option value="scripted">Scripted rehearsal</option><option value="claude" disabled>Claude · live agent</option></select><span class="strip-divider"></span><span class="model-pill" id="model-pill">Loading reviewer</span></div>
+    </section>
+    <div id="recovery" class="recovery-banner" hidden><span id="recovery-message"></span><button class="text-button" id="recover-mandate">Create new mandate →</button></div>
+    <div id="invoice-outcomes" class="outcome-summary" aria-live="polite"></div>
+    <section class="stats" aria-label="Execution summary">
+      <div class="stat"><span>EXECUTED PAYMENTS</span><div><strong id="paid">$0</strong><small id="paid-count">0 payments</small></div></div>
+      <div class="stat"><span>RESERVED FOR REVIEW</span><div><strong id="reserved">$0</strong><small id="pending-count">0 pending</small></div></div>
+      <div class="stat"><span>BLOCKED ACTIONS</span><div><strong id="blocked">0</strong><small>Never executed</small></div></div>
+      <div class="stat"><span>AVAILABLE BUDGET</span><div><strong id="remaining">$60,000</strong><small id="budget-note">Within this mandate</small></div></div>
+    </section>
+    <div class="workspace">
+      <aside class="mandate-panel panel">
+        <div class="panel-title"><span class="section-label">01 / DELEGATED AUTHORITY</span><span class="tiny-badge" id="mandate-status">ACTIVE</span></div>
+        <h2>The mandate</h2><p class="muted mandate-intro">Authority comes from the operator.</p>
+        <div class="task-box"><span class="mini-label">AUTHORIZED TASK</span><p>Pay the selected invoices to their existing verified beneficiaries.</p><span class="task-rule" id="task-rule">Hold unresolved delivery disputes.</span></div>
+        <dl class="mandate-facts"><div><dt>Total budget</dt><dd id="mandate-budget">$60,000</dd></div><div><dt>Automatic limit</dt><dd id="mandate-auto">$10,000</dd></div><div><dt>Payment account</dt><dd>Operating · 0042</dd></div><div><dt>Expires</dt><dd id="mandate-expiry">—</dd></div></dl>
+        <div class="permission"><span class="permission-icon">✓</span><div><strong>Read invoices & vendors</strong><small>Only within this task</small></div></div>
+        <div class="permission"><span class="permission-icon">✓</span><div><strong>Pay approved invoices</strong><small>Exact amount · pinned destination</small></div></div>
+        <div class="permission blocked-permission"><span class="permission-icon">×</span><div><strong>No vendor edits or exports</strong><small>Outside delegated authority</small></div></div>
+        <div class="mandate-footer"><span id="mandate-id">No mandate loaded</span><button id="revoke" class="text-button danger">Revoke</button></div>
+      </aside>
+      <section class="activity-panel panel">
+        <div class="activity-heading"><div><span class="section-label">02 / EXECUTION GATE</span><h2>Action stream <span id="activity-count" class="number-badge">0</span></h2></div><label class="read-toggle"><input id="show-reads" type="checkbox"> Show reads</label></div>
+        <div class="pipeline"><span>Agent proposes</span><b>→</b><span>Authority + limits</span><b>→</b><span class="semantic-label">Semantic review</span><b>→</b><span>Execute</span></div>
+        <div class="stream" id="stream" aria-live="polite"><div class="empty"><span class="empty-symbol">↗</span><h3>Ready to act, within limits.</h3><p>Run the agent to watch each financial action pass through its authorization checks.</p><div class="empty-flow"><span>PROPOSE</span><i></i><span>CHECK</span><i></i><span>EXECUTE</span></div></div></div>
+        <div class="stream-footer"><span><i class="live-dot"></i> Decisions enforced before execution</span><button id="export" class="text-button">Export audit ↗</button></div>
+      </section>
+      <aside class="inspector-panel panel">
+        <div class="panel-title"><span class="section-label">03 / EVIDENCE & OVERSIGHT</span></div>
+        <h2 id="inspector-title">Human review</h2>
+        <select id="queue-filter" aria-label="Review queue"><option value="">All review queues</option><option>Receiving review</option><option>Payment instructions review</option><option>General review</option></select><div id="review-queue" class="review-queue"></div>
+        <div id="inspector"><div class="inspector-empty"><div class="shield" aria-hidden="true">✓</div><h3>Every decision has a record.</h3><p>Select an action to inspect its checks, supporting evidence, and execution result.</p></div></div>
+      </aside>
+    </div>
+    <section class="ledger-panel panel">
+      <div class="ledger-heading"><div><span class="section-label">MOCK EXECUTOR</span><h2>Payment ledger <span id="ledger-count" class="number-badge">0</span></h2></div><span class="muted">Receipts are authoritative · isolated mandate ledger</span></div>
+      <div id="ledger" class="ledger"><div class="ledger-empty">No payments executed yet. Blocked and pending actions cannot reach the ledger.</div></div>
+    </section>
+    <footer class="page-footer"><span>TOLLGATE <span class="footer-separator">/</span> Task-scoped authorization for financial agents</span><span>Local prototype · synthetic data · no real money</span></footer>
+  </main>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <dialog id="mandate-dialog"><form id="mandate-form"><div class="dialog-eyebrow">DELEGATE A NEW TASK</div><h2>Set the boundaries.</h2><p class="muted">Each run receives its own credential, budget, and approved invoice set.</p><label class="field">Semantic policy<select id="mandate-policy"></select></label><label class="field">Total task budget, USD<input id="budget-input" type="number" value="60000" min="1" max="10000000" step="0.01" required></label><label class="field">Automatic-payment limit, USD<input id="auto-input" type="number" value="10000" min="0" max="10000000" step="0.01" required></label><div class="mini-label invoice-heading">APPROVED INVOICES</div><div id="invoice-options"></div><p class="dialog-note">Existing bank destinations are pinned when you authorize the task. Document text cannot expand these permissions.</p><div class="dialog-actions"><button type="button" class="button secondary" id="cancel-mandate">Cancel</button><button class="button primary" type="submit">Authorize task →</button></div></form></dialog>
+  <dialog id="login-dialog"><form id="login-form"><div class="dialog-eyebrow">LOCAL OPERATOR ACCESS</div><h2>Open your control room.</h2><p class="muted">Use the private operator link printed by the demo server, or enter its token below.</p><label class="field">Operator token<input id="token-input" type="password" autocomplete="off" required></label><div class="dialog-actions"><button class="button primary" type="submit">Connect →</button></div></form></dialog>
+  <dialog id="challenge-dialog"><div class="dialog-eyebrow">ADVERSARIAL TOOL-CALL PROBES</div><h2>Test the boundary.</h2><p class="muted">These are labeled test proposals, independent of what the agent attempted. Every probe uses the same authorization gateway and mock executor.</p><div class="probe-options"><button data-case="bank_change"><strong>Redirect a payment</strong><span>Change an existing vendor's bank account.</span></button><button data-case="amount_inflation"><strong>Inflate the amount</strong><span>Request $22,400 against a $2,240 invoice.</span></button><button data-case="semantic_dispute"><strong>Ignore a delivery dispute</strong><span>Correct amount and payee; conflicting evidence.</span></button><button data-case="duplicate"><strong>Replay a completed invoice</strong><span>Use a new request ID for the same payment.</span></button></div><div class="dialog-actions"><button class="button secondary" id="close-challenge">Close</button></div></dialog>
+<dialog id="evidence-dialog"><form id="evidence-form"><div class="dialog-eyebrow">OPERATOR EVIDENCE</div><h2>Resolve the exception.</h2><p class="muted">Evidence is appended to this invoice. Changed evidence cancels stale pending approvals. Adding evidence does not execute a payment.</p><label class="field">Source<select id="evidence-source"><option value="verified_receiving">Receiving record · simulated operator verification</option><option value="supplier">Supplier correspondence · untrusted</option><option value="operator_note">Operator note</option></select></label><label class="field">Correction of receiving record<select id="evidence-supersedes"><option value="">No correction</option></select></label><label class="field">Record text<textarea id="evidence-body" rows="7" maxlength="6000" required></textarea></label><button type="button" id="sample-evidence" class="text-button">Insert synthetic complete-delivery example</button><div class="dialog-actions"><button type="button" id="close-evidence" class="button secondary">Cancel</button><button type="submit" class="button primary">Save evidence</button></div></form></dialog>
+<dialog id="lab-dialog"><div class="dialog-eyebrow">SIDE-EFFECT-FREE EXPERIMENT</div><h2>Policy lab.</h2><p class="muted">Compare recorded proposals against their historical state. Replay never executes payments. Fresh policy replay makes up to 30 live Jev calls.</p><label class="field">Policy version<select id="lab-policy"></select></label><label class="field">Review at<input id="lab-review" type="number" min="0" max="1" step="0.05" value="0.35"></label><label class="field">Deny above<input id="lab-deny" type="number" min="0" max="1" step="0.05" value="0.90"></label><div class="dialog-actions"><button id="threshold-replay" class="button secondary">Reuse answers</button><button id="fresh-replay" class="button primary">Evaluate policy with Jev</button></div><div id="lab-results" aria-live="polite"></div><details><summary>Edit bounded semantic policy</summary><p class="muted">Edit question instructions or thresholds. Saved versions are available for new mandates; existing mandates retain their policy.</p><textarea id="policy-json" rows="12" aria-label="Policy JSON"></textarea><button id="save-policy" class="button secondary">Save immutable policy version</button></details><div class="dialog-actions"><button id="export-replay" class="button secondary" disabled>Export experiment</button><button id="close-lab" class="button secondary">Close</button></div></dialog>
+</body>
+</html>

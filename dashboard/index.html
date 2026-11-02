@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tollgate Console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --line: #e4e7ec;
+    --line-soft: #eef0f3;
+    --ink: #101828;
+    --ink-2: #475467;
+    --ink-3: #8a94a6;
+    --brand: #1d2939;
+    --allow: #12805c;   --allow-bg: #e9f7f0;  --allow-line: #b7e4cf;
+    --esc: #b25e09;     --esc-bg: #fff4e0;    --esc-line: #f6d39a;
+    --deny: #c62828;    --deny-bg: #fdecec;   --deny-line: #f4b4b4;
+    --radius: 10px;
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.4 var(--sans); font-feature-settings: "tnum" 1, "cv11" 1;
+    -webkit-font-smoothing: antialiased;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  .app { display: grid; grid-template-rows: auto auto 1fr; height: 100vh; min-height: 600px; gap: 14px; padding: 14px 18px 18px; }
+
+  /* Header */
+  header { display: flex; align-items: center; gap: 14px; }
+  .logo { width: 30px; height: 30px; border-radius: 8px; background: var(--brand); display: grid; place-items: center; }
+  .logo svg { width: 18px; height: 18px; }
+  .title { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; }
+  .subtitle { color: var(--ink-3); font-size: 13px; }
+  .spacer { flex: 1; }
+  .status { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 12.5px;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 5px 12px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ink-3); }
+  .dot.live { background: var(--allow); box-shadow: 0 0 0 3px var(--allow-bg); animation: pulse 2s infinite; }
+  .dot.down { background: var(--deny); }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(18,128,92,0.08); } }
+
+  /* Counters */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px;
+          display: flex; align-items: center; gap: 14px; }
+  .stat .bar { width: 4px; align-self: stretch; border-radius: 4px; background: var(--line); }
+  .stat.allow .bar { background: var(--allow); } .stat.esc .bar { background: var(--esc); } .stat.deny .bar { background: var(--deny); }
+  .stat .label { color: var(--ink-2); font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
+  .stat .value { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; }
+  .stat .value small { font-size: 14px; color: var(--ink-3); font-weight: 500; margin-left: 2px; }
+  .stat.bump .value { animation: bump .5s ease; }
+  @keyframes bump { 30% { transform: translateY(-2px); } }
+
+  /* Main grid */
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 14px; min-height: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; min-height: 0; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line-soft); }
+  .panel-head h2 { margin: 0; font-size: 13.5px; font-weight: 600; }
+  .panel-head .count { color: var(--ink-3); font-size: 12.5px; }
+  .side { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 14px; min-height: 0; }
+
+  .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 2px; }
+  .seg button { border: 0; background: transparent; font: 500 12px var(--sans); color: var(--ink-2); padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+  .seg button.on { background: var(--panel); color: var(--ink); box-shadow: 0 1px 2px rgba(16,24,40,.08); }
+  .ghost { border: 1px solid var(--line); background: var(--panel); color: var(--ink-2); font: 500 12px var(--sans); padding: 5px 10px; border-radius: 8px; cursor: pointer; }
+  .ghost:hover { color: var(--ink); }
+
+  /* Feed */
+  .cols, .row { display: grid; grid-template-columns: 92px 176px 158px 104px minmax(0, 1fr) 64px; align-items: center; column-gap: 14px; padding: 0 16px; }
+  .cols { height: 32px; color: var(--ink-3); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--line-soft); }
+  .right { text-align: right; }
+  .feed { overflow-y: auto; flex: 1; min-height: 0; }
+  .row { position: relative; min-height: 50px; padding-top: 7px; padding-bottom: 7px; border-bottom: 1px solid var(--line-soft); cursor: pointer; transition: background .6s ease; }
+  .row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: transparent; }
+  .row.allow::before { background: var(--allow); }
+  .row.escalate { background: var(--esc-bg); } .row.escalate::before { background: var(--esc); }
+  .row.deny { background: var(--deny-bg); } .row.deny::before { background: var(--deny); }
+  .row:hover { filter: brightness(0.985); }
+  .row.new { animation: enter .45s cubic-bezier(.2,.8,.2,1); }
+  .row.new.allow { animation: enter .45s cubic-bezier(.2,.8,.2,1), flash-allow 1.6s ease; }
+  .row.new.escalate { animation: enter .45s cubic-bezier(.2,.8,.2,1), flash-esc 2s ease; }
+  .row.new.deny { animation: enter .45s cubic-bezier(.2,.8,.2,1), flash-deny 2.6s ease; }
+  @keyframes enter { from { opacity: 0; transform: translateY(-8px); } }
+  @keyframes flash-allow { 0%, 30% { background: #d3f0e2; } 100% { background: transparent; } }
+  @keyframes flash-esc { 0%, 35% { background: #fde3b0; } 100% { background: var(--esc-bg); } }
+  @keyframes flash-deny { 0%, 40% { background: #f9c9c9; box-shadow: inset 0 0 0 1px var(--deny-line); } 100% { background: var(--deny-bg); } }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; border: 1px solid; width: fit-content; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .pill.allow { color: var(--allow); background: var(--allow-bg); border-color: var(--allow-line); }
+  .pill.escalate { color: var(--esc); background: #fff; border-color: var(--esc-line); }
+  .pill.deny { color: #fff; background: var(--deny); border-color: var(--deny); }
+  .pill.deny::before { background: #fff; }
+  .tool { font: 500 12.5px var(--mono); color: var(--ink); }
+  .sub { color: var(--ink-3); font-size: 12px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sub.mono { font-family: var(--mono); font-size: 11.5px; }
+  .vendor { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .amount { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+  .amount.none { color: var(--ink-3); font-weight: 400; }
+  .reason { min-width: 0; }
+  .reason .r1 { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row.allow .reason .r1 { color: var(--ink-2); font-weight: 400; }
+  .row.deny .reason .r1 { color: #8f1d1d; }
+  .row.escalate .reason .r1 { color: #7a4106; }
+  .lat { text-align: right; color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+  .res { display: inline-block; margin-left: 6px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-2); }
+
+  .details { display: none; grid-column: 1 / -1; margin-top: 8px; padding: 10px 12px; background: rgba(255,255,255,.7); border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--ink-2); }
+  .row.open .details { display: block; cursor: default; }
+  .details h4 { margin: 0 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+  .details pre { margin: 0 0 8px; white-space: pre-wrap; font: 11.5px/1.45 var(--mono); color: var(--ink); max-height: 140px; overflow: auto; }
+  .details ul { margin: 0 0 8px; padding-left: 16px; font-family: var(--mono); font-size: 11.5px; color: var(--ink); }
+
+  .empty { padding: 48px 24px; text-align: center; color: var(--ink-3); }
+  .empty code { font: 12px var(--mono); background: var(--bg); border: 1px solid var(--line); padding: 3px 8px; border-radius: 6px; color: var(--ink-2); }
+
+  /* Review queue */
+  .queue { overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; flex: 1; min-height: 0; }
+  .card { border: 1px solid var(--esc-line); background: linear-gradient(0deg, #fffdf8, #fffaf0); border-radius: 9px; padding: 12px; animation: enter .4s ease; transition: opacity .35s, transform .35s; }
+  .card.gone { opacity: 0; transform: translateX(16px); }
+  .card .top { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+  .card .who { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .amt { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .card .what { font: 11.5px var(--mono); color: var(--ink-2); margin-top: 2px; }
+  .card .why { margin-top: 8px; font-size: 12.5px; color: #7a4106; }
+  .card .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .btn { height: 32px; border-radius: 7px; font: 600 12.5px var(--sans); cursor: pointer; border: 1px solid; }
+  .btn.approve { background: var(--allow); color: #fff; border-color: var(--allow); }
+  .btn.reject { background: #fff; color: var(--deny); border-color: var(--deny-line); }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .queue .empty { padding: 28px 12px; font-size: 13px; }
+  .badge { min-width: 22px; height: 20px; padding: 0 7px; border-radius: 999px; background: var(--esc-bg); color: var(--esc); font-size: 12px; font-weight: 700; display: inline-grid; place-items: center; }
+  .badge.zero { background: var(--bg); color: var(--ink-3); }
+
+  /* Thresholds */
+  .th { padding: 14px 16px 16px; }
+  .band { position: relative; height: 10px; border-radius: 999px; overflow: hidden; display: flex; margin: 4px 0 14px; }
+  .band span { height: 100%; transition: width .2s; }
+  .band .a { background: var(--allow); } .band .e { background: #e9a23b; } .band .d { background: var(--deny); }
+  .slider { display: grid; grid-template-columns: 92px 1fr 44px; align-items: center; gap: 10px; margin-top: 8px; }
+  .slider label { font-size: 12.5px; color: var(--ink-2); font-weight: 500; }
+  .slider output { text-align: right; font: 600 13px var(--mono); }
+  input[type=range] { width: 100%; accent-color: var(--brand); }
+  .th .hint { margin-top: 10px; font-size: 11.5px; color: var(--ink-3); }
+  .scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--ink-3); }
+
+  /* Toast */
+  .toast { position: fixed; right: 18px; bottom: 18px; max-width: 420px; background: #1b1f27; color: #fff; border-radius: 10px; padding: 12px 14px 12px 16px;
+           box-shadow: 0 12px 32px rgba(16,24,40,.28); display: flex; gap: 12px; align-items: flex-start; transform: translateY(20px); opacity: 0; transition: all .35s ease; pointer-events: none; border-left: 4px solid var(--deny); }
+  .toast.show { transform: none; opacity: 1; }
+  .toast b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .toast span { font-size: 12.5px; color: #d0d5dd; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"><path d="M4 20V8l8-4 8 4v12"/><path d="M4 12h16"/><path d="M12 12v8"/></svg>
+    </div>
+    <div>
+      <div class="title">Tollgate</div>
+      <div class="subtitle">Decision firewall &middot; Northwind Supply accounts payable agent</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Connecting&hellip;</span></div>
+  </header>
+
+  <section class="stats">
+    <div class="stat allow" id="s-allow"><div class="bar"></div><div><div class="label">Allowed</div><div class="value num" id="c-allow">0</div></div></div>
+    <div class="stat esc" id="s-esc"><div class="bar"></div><div><div class="label">Escalated</div><div class="value num" id="c-esc">0</div></div></div>
+    <div class="stat deny" id="s-deny"><div class="bar"></div><div><div class="label">Denied</div><div class="value num" id="c-deny">0</div></div></div>
+    <div class="stat" id="s-lat"><div class="bar"></div><div><div class="label">Mean latency</div><div class="value num" id="c-lat">&ndash;</div></div></div>
+  </section>
+
+  <main>
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Live decisions</h2><span class="count num" id="feed-count"></span>
+        <div class="spacer"></div>
+        <div class="seg" role="group" aria-label="Filter">
+          <button id="f-writes" class="on" title="Payments, vendor edits and emails">Money &amp; data moves</button>
+          <button id="f-all" title="Include read_invoice and lookup_vendor">All tool calls</button>
+        </div>
+        <button class="ghost" id="clear" title="Hide decisions so far (view only)">Clear view</button>
+      </div>
+      <div class="cols"><div>Verdict</div><div>Tool</div><div>Vendor</div><div class="right">Amount</div><div>Top reason</div><div class="right">Latency</div></div>
+      <div class="feed" id="feed"></div>
+    </section>
+
+    <div class="side">
+      <section class="panel">
+        <div class="panel-head"><h2>Review queue</h2><span class="badge zero num" id="q-count">0</span></div>
+        <div class="queue" id="queue"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>Risk thresholds</h2><div class="spacer"></div><span class="count" id="th-state"></span></div>
+        <div class="th">
+          <div class="band"><span class="a" id="b-a"></span><span class="e" id="b-e"></span><span class="d" id="b-d"></span></div>
+          <div class="scale"><span>allow</span><span>escalate</span><span>deny</span></div>
+          <div class="slider"><label for="allow_below">Allow below</label><input type="range" id="allow_below" min="0" max="1" step="0.01"><output id="o-allow">&ndash;</output></div>
+          <div class="slider"><label for="deny_above">Deny above</label><input type="range" id="deny_above" min="0" max="1" step="0.01"><output id="o-deny">&ndash;</output></div>
+          <div class="hint">Applies to new decisions. Risk between the two values goes to human review.</div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+<div class="toast" id="toast"><div><b id="toast-title"></b><span id="toast-body"></span></div></div>
+
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const API = (params.get("api") || "").replace(/\/$/, "");
+  const READS = new Set(["read_invoice", "lookup_vendor"]);
+  const LABELS = {
+    payee_bank_change: "Payee bank details change",
+    unverified_instruction_source: "Instruction from a document",
+    amount_mismatch: "Amount differs from invoice",
+    duplicate_invoice: "Possible duplicate payment",
+    split_payment: "Possible split payment",
+    new_or_lookalike_vendor: "New or look-alike vendor",
+    data_export: "Internal data leaving the company",
+    overall_risk: "Elevated overall risk",
+    judge_parse_error: "Judge output unreadable",
+  };
+  const $ = (id) => document.getElementById(id);
+  const state = { records: [], seen: new Set(), first: true, showAll: false, floor: 0, open: new Set(), dragging: false };
+  const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  async function api(path, opts) {
+    const r = await fetch(API + path, opts);
+    if (!r.ok) throw new Error(path + " " + r.status);
+    return r.json();
+  }
+
+  // Strength of a reason string, for picking the most decisive one to show.
+  function strength(r) {
+    if (r.startsWith("intent=")) return -1;
+    const p = r.match(/p=([\d.]+)/); if (p) return +p[1];
+    const sc = r.match(/score=(\d)\/3/); if (sc) return +sc[1] / 6;   // a named policy outranks the overall score
+    const rk = r.match(/^risk ([\d.]+)/); if (rk) return +rk[1];
+    return 0;
+  }
+  function topReason(res) {
+    const rs = res.reasons || [];
+    if (!rs.length) return "";
+    const max = Math.max(...rs.map(strength));
+    return rs.find((r) => strength(r) >= max - 0.05);   // near-ties keep the engine's order
+  }
+  function prettyReason(reason) {
+    if (!reason) return { head: "", tail: "" };
+    const rk = reason.match(/^risk ([\d.]+) >= allow threshold ([\d.]+) \((\w+)\)/);
+    if (rk) return { head: rk[3] === "payment_large" ? "Large payment needs sign-off" : "Above auto-approve limit", tail: "risk " + rk[1] + " \u2265 " + rk[2] };
+    const m = reason.match(/^([a-z_]+)\s*(.*)$/);
+    if (m && LABELS[m[1]]) return { head: LABELS[m[1]], tail: m[2] };
+    if (reason.startsWith("intent=")) return { head: "Intent: " + reason.slice(7).replace(/_/g, " "), tail: "" };
+    return { head: reason, tail: "" };
+  }
+  function vendorOf(a) {
+    if (a.vendor_context) return a.vendor_context.name;
+    return a.args.vendor_id || a.args.to || "–";
+  }
+  function detailOf(a) {
+    const g = a.args;
+    switch (a.tool) {
+      case "schedule_payment": return (g.memo || "") + (g.date ? "  ·  " + g.date : "");
+      case "update_vendor": return Object.entries(g.fields || {}).map(([k, v]) => k + " → " + v).join(", ");
+      case "send_email": return "to " + (g.to || "") + ": " + (g.subject || "");
+      case "read_invoice": return g.invoice_id || "";
+      case "lookup_vendor": return g.vendor_id || "";
+      default: return JSON.stringify(g);
+    }
+  }
+  const fmtLat = (ms) => ms >= 1000 ? (ms / 1000).toFixed(2) + " s" : ms >= 10 ? Math.round(ms) + " ms" : ms.toFixed(1) + " ms";
+  const visible = () => state.records.filter((r) => r.decision_id > state.floor && (state.showAll || !READS.has(r.action.tool)));
+
+  function buildRow(rec) {
+    const a = rec.action, res = rec.result, v = res.verdict;
+    const row = el("div", "row " + v);
+    row.dataset.id = rec.decision_id;
+    const c1 = el("div");
+    c1.append(el("span", "pill " + v, v === "escalate" ? "Review" : v));
+    if (rec.resolution) c1.append(el("span", "res", rec.resolution === "approve" ? "approved" : "rejected"));
+    const c2 = el("div");
+    c2.append(el("div", "tool", a.tool), el("div", "sub mono", detailOf(a)));
+    const c3 = el("div");
+    c3.append(el("div", "vendor", vendorOf(a)), el("div", "sub", a.vendor_context ? a.vendor_context.vendor_id : ""));
+    const c4 = el("div", "amount" + (a.amount_usd == null ? " none" : ""), a.amount_usd == null ? "–" : usd.format(a.amount_usd));
+    const top = prettyReason(topReason(res));
+    const more = res.reasons.filter((r) => !r.startsWith("intent=")).length - 1;
+    const c5 = el("div", "reason");
+    c5.append(el("div", "r1", v === "allow" ? "Cleared all checks" : top.head));
+    c5.append(el("div", "sub mono", v === "allow" ? "risk " + res.risk.toFixed(2)
+      : top.tail + (more > 0 ? "  \u00b7  +" + more + " more" : "")));
+    const c6 = el("div", "lat", fmtLat(res.latency_ms));
+    const det = el("div", "details");
+    det.addEventListener("click", (e) => e.stopPropagation());
+    det.append(el("h4", null, "Reasons"));
+    const ul = el("ul");
+    res.reasons.forEach((r) => ul.append(el("li", null, r)));
+    det.append(ul, el("h4", null, "Arguments"), el("pre", null, JSON.stringify(a.args, null, 2)));
+    if (a.documents.length) det.append(el("h4", null, "Documents the agent read"), el("pre", null, a.documents.join("\n\n---\n\n")));
+    det.append(el("h4", null, "Meta"), el("pre", null,
+      `decision #${rec.decision_id} · ${a.action_id} · ${new Date(rec.created_at).toLocaleTimeString()} · risk ${res.risk.toFixed(2)} · ${res.system} · $${res.cost_usd.toFixed(5)}`));
+    row.append(c1, c2, c3, c4, c5, c6, det);
+    if (state.open.has(rec.decision_id)) row.classList.add("open");
+    row.addEventListener("click", () => {
+      row.classList.toggle("open");
+      row.classList.contains("open") ? state.open.add(rec.decision_id) : state.open.delete(rec.decision_id);
+    });
+    return row;
+  }
+
+  function renderFeed(fresh) {
+    const feed = $("feed"), rows = visible();
+    const sig = rows.map((r) => r.decision_id + (r.resolution || "")).join(",") + "|" + state.showAll;
+    if (sig === state.sig) return;
+    state.sig = sig;
+    const scroll = feed.scrollTop;
+    feed.replaceChildren();
+    if (!rows.length) {
+      const e = el("div", "empty");
+      e.append(el("div", null, "Waiting for the agent…"), el("div", null, " "));
+      const c = el("code", null, "python -m agent.demo_scenario --gate http");
+      e.append(c);
+      feed.append(e);
+    }
+    for (const rec of rows) {
+      const row = buildRow(rec);
+      if (fresh.has(rec.decision_id)) row.classList.add("new");
+      feed.append(row);
+    }
+    feed.scrollTop = fresh.size ? 0 : scroll;
+    $("feed-count").textContent = rows.length ? rows.length + (rows.length === 1 ? " decision" : " decisions") : "";
+  }
+
+  function renderCounters() {
+    const rows = visible();
+    const n = (v) => rows.filter((r) => r.result.verdict === v).length;
+    const set = (id, statId, val) => {
+      const node = $(id), s = String(val);
+      if (node.textContent !== s) {
+        node.textContent = s;
+        const st = $(statId); st.classList.remove("bump"); void st.offsetWidth; st.classList.add("bump");
+      }
+    };
+    set("c-allow", "s-allow", n("allow"));
+    set("c-esc", "s-esc", n("escalate"));
+    set("c-deny", "s-deny", n("deny"));
+    const lat = rows.length ? rows.reduce((s, r) => s + r.result.latency_ms, 0) / rows.length : null;
+    const node = $("c-lat");
+    if (lat == null) node.textContent = "–";
+    else {
+      const [val, unit] = fmtLat(lat).split(" ");
+      node.replaceChildren(document.createTextNode(val), el("small", null, unit));
+    }
+  }
+
+  let toastTimer;
+  function toast(rec) {
+    const top = prettyReason(topReason(rec.result));
+    $("toast-title").textContent = "Blocked: " + rec.action.tool + " · " + vendorOf(rec.action) +
+      (rec.action.amount_usd != null ? " · " + usd.format(rec.action.amount_usd) : "");
+    $("toast-body").textContent = top.head + (top.tail ? " (" + top.tail + ")" : "");
+    $("toast").classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => $("toast").classList.remove("show"), 4500);
+  }
+
+  async function pollDecisions() {
+    try {
+      const recs = await api("/decisions?limit=200");
+      const fresh = new Set();
+      for (const r of recs) if (!state.seen.has(r.decision_id)) { if (!state.first) fresh.add(r.decision_id); state.seen.add(r.decision_id); }
+      state.records = recs;
+      state.first = false;
+      renderFeed(fresh);
+      renderCounters();
+      const denied = recs.filter((r) => fresh.has(r.decision_id) && r.result.verdict === "deny" && r.decision_id > state.floor);
+      if (denied.length) toast(denied[0]);
+      setStatus(true);
+    } catch (e) { setStatus(false); }
+  }
+
+  let gateLabel = "";
+  function setStatus(ok) {
+    $("dot").className = "dot " + (ok ? "live" : "down");
+    $("status").textContent = ok ? "Live" + (gateLabel ? " · " + gateLabel : "") : "API unreachable";
+  }
+
+  async function pollReview() {
+    try {
+      const recs = await api("/review");
+      const q = $("queue");
+      const ids = recs.map((r) => r.decision_id).join(",");
+      $("q-count").textContent = recs.length;
+      $("q-count").className = "badge num" + (recs.length ? "" : " zero");
+      if (ids === state.qsig) return;
+      state.qsig = ids;
+      q.replaceChildren();
+      if (!recs.length) { q.append(el("div", "empty", "Nothing waiting for a human.")); return; }
+      for (const rec of recs) q.append(buildCard(rec));
+    } catch (e) { /* status shown by decisions poll */ }
+  }
+
+  function buildCard(rec) {
+    const a = rec.action, card = el("div", "card");
+    const top = el("div", "top");
+    top.append(el("div", "who", vendorOf(a)), el("div", "amt", a.amount_usd == null ? "" : usd.format(a.amount_usd)));
+    const r = prettyReason(topReason(rec.result));
+    card.append(top, el("div", "what", a.tool + "  ·  " + detailOf(a)), el("div", "why", r.head + (r.tail ? " · " + r.tail : "")));
+    const btns = el("div", "btns");
+    const ok = el("button", "btn approve", "Approve"), no = el("button", "btn reject", "Reject");
+    const go = async (resolution) => {
+      ok.disabled = no.disabled = true;
+      try {
+        await api("/review/" + rec.decision_id, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resolution }) });
+        card.classList.add("gone");
+        setTimeout(() => { state.qsig = null; pollReview(); pollDecisions(); }, 350);
+      } catch (e) { ok.disabled = no.disabled = false; }
+    };
+    ok.onclick = () => go("approve");
+    no.onclick = () => go("reject");
+    btns.append(ok, no);
+    card.append(btns);
+    return card;
+  }
+
+  // Thresholds
+  const sA = $("allow_below"), sD = $("deny_above");
+  function drawBand() {
+    const a = +sA.value, d = +sD.value;
+    $("b-a").style.width = a * 100 + "%";
+    $("b-e").style.width = (d - a) * 100 + "%";
+    $("b-d").style.width = (1 - d) * 100 + "%";
+    $("o-allow").textContent = a.toFixed(2);
+    $("o-deny").textContent = d.toFixed(2);
+  }
+  async function loadThresholds() {
+    if (state.dragging) return;
+    try {
+      const t = await api("/thresholds");
+      sA.value = t.allow_below; sD.value = t.deny_above; drawBand();
+    } catch (e) {}
+  }
+  let putTimer;
+  function onSlide(which) {
+    state.dragging = true;
+    if (+sA.value > +sD.value) { if (which === "a") sD.value = sA.value; else sA.value = sD.value; }
+    drawBand();
+    clearTimeout(putTimer);
+    putTimer = setTimeout(saveThresholds, 250);
+  }
+  async function saveThresholds() {
+    $("th-state").textContent = "Saving…";
+    try {
+      const t = await api("/thresholds", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allow_below: +(+sA.value).toFixed(2), deny_above: +(+sD.value).toFixed(2) }) });
+      sA.value = t.allow_below; sD.value = t.deny_above; drawBand();
+      $("th-state").textContent = "Saved";
+      setTimeout(() => ($("th-state").textContent = ""), 1500);
+    } catch (e) { $("th-state").textContent = "Save failed"; }
+    state.dragging = false;
+  }
+  sA.addEventListener("input", () => onSlide("a"));
+  sD.addEventListener("input", () => onSlide("d"));
+
+  // Controls
+  function setFilter(all) {
+    state.showAll = all;
+    $("f-all").classList.toggle("on", all);
+    $("f-writes").classList.toggle("on", !all);
+    state.sig = null; renderFeed(new Set()); renderCounters();
+  }
+  $("f-all").onclick = () => setFilter(true);
+  $("f-writes").onclick = () => setFilter(false);
+  $("clear").onclick = () => {
+    state.floor = state.records.reduce((m, r) => Math.max(m, r.decision_id), state.floor);
+    state.sig = null; renderFeed(new Set()); renderCounters();
+  };
+  if (params.get("all") === "1") setFilter(true);
+
+  api("/health").then((h) => { gateLabel = h.gate || ""; }).catch(() => {});
+  loadThresholds();
+  pollDecisions(); pollReview();
+  setInterval(pollDecisions, 1000);
+  setInterval(pollReview, 1000);
+  setInterval(loadThresholds, 5000);
+})();
+</script>
+</body>
+</html>
