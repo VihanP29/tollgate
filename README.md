@@ -1,75 +1,72 @@
 # Tollgate
 
-**Task-scoped authorization for financial AI agents.**
+**Task scoped authorization for financial AI agents.**
 
-Give an agent a specific task, an approved invoice set and a budget. Tollgate checks each proposed tool call against that authority, applies deterministic financial controls and uses Jev for narrow semantic checks before a mock executor can act.
+Tollgate gives an agent a specific task, an approved invoice set, and a budget. It checks each proposed tool call against that authority, enforces deterministic financial controls, and uses Jev for narrow semantic checks before a mock executor can act.
 
 ![Tollgate control room](docs/jev-evidence-resolved.png)
 
-This is a working local prototype with synthetic data and a mock financial executor. It does not connect to a bank or move real money.
+This is a local prototype with synthetic data and a mock financial executor. It does not connect to a bank or move real money.
 
-## Jev showcase
+## What the demo includes
 
-New mandates now evaluate three semantic probabilities, a delivery-confirmation Score and an exception-routing Choice in one Jev request. Inspect typed distributions, filter review queues, append receiving evidence, and explicitly reassess a payment. The Policy lab compares historical decisions using saved answers or fresh Jev evaluations, without executing payments. Bounded policy editing saves immutable versions for future mandates.
+- A Control Room for creating mandates, running an agent, inspecting decisions, reviewing exceptions, and inspecting mock payment receipts.
+- Jev classification using three Noul probabilities, a delivery confirmation Score, and an exception routing Choice in one request.
+- Evidence timelines, review queues, and explicit reassessment after an operator adds receiving evidence.
+- A Policy Studio for editing financial limits, Jev question instructions and criteria, decision rules, and Choice routing. It can compare a draft against a saved policy, inspect the compiled Jev request, save versions, and activate a tested version for new mandates.
+- A deterministic scripted rehearsal and an optional live Claude agent. Adversarial challenge probes use the same authorization gateway and are labeled separately.
 
-See **[SHOWCASE.md](SHOWCASE.md)** for the current recording sequence, saved live evidence and implementation limits. The original recording guide below predates these additions; use the showcase sequence for the application video.
+## Run locally
 
-## Run the demo
-
-From the project root, run `./Launch Tollgate.command` after creating the virtual environment below. It uses only this checkout and reads its local `.env` file if present. Open the private operator URL printed in Terminal.
-
-For a fresh checkout, use Python 3.12+:
+Requirements: Python 3.12 or newer. From the project root:
 
 ```sh
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 cp .env.example .env
-# Add your API keys to .env, then:
 .venv/bin/python -m tollgate.demo_server
 ```
 
-With `TYPESAFE_API_KEY`, semantic review uses pinned `jev-1.14.0`. Without it, the UI explicitly says **OFFLINE · FIXTURE CHECKS**. Offline mode is for rehearsing this fixture, not measuring AI performance.
+Or, after creating the environment, run `./Launch Tollgate.command` on macOS. Keep the terminal open and use the private operator URL printed when the server starts. Opening the HTML file directly does not start the server.
 
-To choose explicitly:
+No API keys are needed for offline mode. Without `TYPESAFE_API_KEY`, the app uses explicitly labeled fixture checks. This is a rehearsal mode and does not interpret arbitrary edited prompts. To enable live Jev classification, set `TYPESAFE_API_KEY` in `.env`. To enable the live Claude agent, set `ANTHROPIC_API_KEY` too. Live calls may incur provider charges.
+
+Choose the backend explicitly if needed:
 
 ```sh
 .venv/bin/python -m tollgate.demo_server --backend offline
 .venv/bin/python -m tollgate.demo_server --backend jev
 ```
 
-The server listens only on `127.0.0.1:8765`. Its operator link is a local access credential; keep it private. Runtime state is saved to `.runtime/control.sqlite`, excluded from Git. Use `--port 8766` if port 8765 is occupied. Keep Terminal running while using the app; opening the HTML file directly does not start the server.
+The server listens only on `127.0.0.1:8765`. The operator link is a local access credential; keep it private. Runtime state is saved to `.runtime/control.sqlite` and excluded from Git. Use `--port 8766` if port 8765 is occupied. After restarting, saved receipts and pending reviews remain available. Create a new mandate to run an agent or challenge probes again.
 
-After restarting the server, saved receipts and pending reviews remain available. Use **Create new mandate** to run an agent or submit challenge probes again. The invoice counts distinguish paid, awaiting review, blocked and unprocessed items; **agent finished** means it stopped proposing actions.
+## Demo walkthrough
 
-Each mandate has an isolated synthetic ledger. Budgets and duplicate checks apply within that mandate.
+1. Create a mandate with the $60,000 task budget, $10,000 automatic payment limit, and approved invoices. The operator pins the approved invoice amount and beneficiary bank details.
+2. Run **Scripted rehearsal** for predictable behavior. With both API keys configured, select **Claude · live agent** to make real Anthropic and Jev calls; financial tools remain mocked.
+3. Open **Policy Studio**, clone a policy, and inspect Financial, Jev questions, and Decision rules. Edit shared guidance or a typed question, then preview the compiled request.
+4. Compare the draft against the **Dispute controls** baseline. The four synthetic cases cover complete receiving evidence, missing confirmation, supplier-only claims, and unresolved disputes. Inspect typed answers, financial checks, and the exact request.
+5. Save the immutable version and activate it for new mandates. Existing mandates keep their pinned policy. Experiments do not execute payments or reserve budget.
+6. Return to the Control Room to inspect evidence, submit a labeled adversarial probe, or review a pending decision. Approval rechecks current authority and evidence before it records a mock receipt.
 
-## What to show
+The live agent may reject suspicious document instructions itself. Attribute to Tollgate only decisions its gateway records. Counts distinguish paid, awaiting review, blocked, and unprocessed invoices; an agent finishing means it stopped proposing actions, not that every invoice was paid.
 
-1. Create a mandate: $60,000 total budget, $10,000 automatic-payment limit, six selected invoices. Bank destinations are pinned from the operator-authorized records.
-2. Choose **Claude · live agent** and run it. This makes real Anthropic calls and real Jev calls, while all financial tools remain mocked. The live agent may correctly reject suspicious document instructions itself.
-3. Use **Challenge gate** to submit explicitly labeled adversarial tool-call probes through the same gateway. Show an unauthorized bank edit, amount inflation, a duplicate, and a disputed invoice whose amount and beneficiary are otherwise valid.
-4. Inspect the disputed invoice. All hard constraints pass; Jev assesses the conflicting correspondence.
-5. Approve the $38,000 payment. The gateway rechecks current authority, bank details, evidence, duplicates and budget, then adds one receipt to the ledger. Retrying approval cannot create another payment.
-6. Export the audit or revoke the mandate. Revocation cancels outstanding review items and prevents further execution.
+## How authorization works
 
-**Scripted rehearsal** deterministically proposes the original attack sequence. With a live Jev backend, those semantic classifications are still live. It is labeled separately from the real Claude agent. Probe events are labeled separately from both.
+The agent cannot grant itself permissions or provide the trusted operator request. Its API accepts a request ID, tool, and arguments and requires a session specific credential. Operator routes require a separate local credential.
 
-## Why this is more than an AI judge
+The gateway checks:
 
-The agent cannot grant itself permissions or supply the trusted operator request. The external action API accepts only a request ID, tool and arguments. It requires a session-specific agent credential. Operator routes require a separate operator credential.
-
-The gateway enforces:
-
-- Active, unrevoked, expiring task authority and a permitted tool set.
-- An exact match to the operator-approved invoice amount and beneficiary.
+- Active, unrevoked, expiring authority and permitted tools.
+- Exact match to the approved invoice amount and beneficiary.
 - Pinned bank account and routing details.
-- A cumulative task budget, including money reserved for pending reviews.
-- Duplicate prevention across different request IDs, plus idempotent retries of the same request.
-- Jev checks for an action following conflicting document instructions and unresolved delivery disputes.
-- No automatic execution when semantic review is unavailable or uncertain.
-- Binding of human approval to the reviewed action and evidence, with fresh constraint checks.
+- Cumulative task budget, including amounts reserved for pending reviews.
+- Duplicate payments across distinct request IDs, with idempotent retries for the same request.
+- Jev classifications for conflicting document instructions and delivery exceptions.
+- Human approval bound to the reviewed action and evidence, followed by fresh constraint checks.
+- Fail closed behavior when semantic review is unavailable or uncertain.
 
-The executor implements only reads and invoice payments. Vendor edits and exports have no execution path under this mandate. SQLite records the mandate, proposals, decisions, review resolutions and receipts; the agent's generated summary is not the execution record.
+The mock executor implements reads and invoice payments. Vendor edits and exports have no execution path under this mandate. SQLite records mandates, proposals, decisions, review resolutions, and receipts. The agent's summary is not the execution record.
 
 ```mermaid
 flowchart LR
@@ -85,49 +82,42 @@ flowchart LR
   E --> L[Ledger receipt and audit]
 ```
 
-## Evidence and its limits
+## Evaluation and limitations
 
-The new semantic acceptance evaluation contains **16 manually authored synthetic cases**, run twice: eight legitimate payments and eight payments conflicting with unresolved delivery evidence. All have valid amounts, beneficiaries and budget. The permissions-only baseline uses the same executor without semantic review.
+The project includes a synthetic semantic acceptance evaluator and sample datasets. A prior run used 16 manually authored cases twice: eight routine payments and eight payments conflicting with unresolved delivery evidence. The reported run stopped 16/16 risky attempts with Jev, compared with 0/16 for a permissions only baseline; both systems auto executed 16/16 legitimate attempts. These were repeated examples, not 32 unique cases, a held out bank benchmark, or a production accuracy claim. Thresholds are provisional, model probabilities are not guarantees, and pricing has not been verified. Generated run results are deliberately excluded from this repository; use the evaluator code to produce a new local run.
 
-| System | Risky payments stopped | Legitimate payments auto-executed | Median decision latency |
-|---|---:|---:|---:|
-| Permissions and hard constraints only | 0 / 16 | 16 / 16 | <1 ms |
-| Same gateway + Jev | 16 / 16 | 16 / 16 | 83 ms |
+The system is a prototype, not production banking infrastructure. Identity uses local bearer tokens, the ledger is synthetic, and runtime state is stored in a local SQLite database. It has no enterprise identity provider or live bank integration. Policy comparisons use small independent scenarios; they are not a sequential simulation of how hypothetical payments change later budget balances. Historical events without captured financial snapshots support semantic only comparisons. Offline mode cannot interpret arbitrary edited prompts.
 
-These are repeated acceptance cases, **not 32 unique examples, a held-out bank benchmark, or a production accuracy claim**. Model probabilities are not guarantees. Pricing is unverified, so this demo makes no cost claim. The reproducible evaluation code is in `evals/control_eval.py`; its generated output is intentionally ignored by Git.
+## Development and verification
 
-Live run results are not included in this repository. Keep generated reports and any request traces out of Git unless they have been reviewed and intentionally prepared for publication.
+Install dependencies as described above. Run tests and frontend syntax checks from the project root:
 
-Reproduce the new acceptance evaluation (paid API calls):
+```sh
+.venv/bin/python -m pytest
+node --check dashboard/control.js
+node --check dashboard/studio.js
+```
+
+The tests use mocked clients or explicitly labeled offline fixtures; they do not require paid API calls. The live evaluator does make provider calls and can incur charges:
 
 ```sh
 .venv/bin/python -m evals.control_eval --live --env-file .env --runs 2
 ```
 
-The legacy benchmark code remains for provenance. Its previous results have known limitations and do not measure this authorization gateway.
+The evaluator writes generated output locally; those result files are ignored by Git.
 
-## Source map
+## Project map
 
-- `tollgate/authorization.py`: task mandates, session credentials, constraints, Jev checks, executor, reviews and audit persistence.
-- `tollgate/control_runner.py`: real Claude tool loop or deterministic rehearsal, both calling the same gateway.
-- `tollgate/demo_server.py`: authenticated operator and agent API routes and local launcher.
-- `dashboard/control.html`, `control.css`, `control.js`: the new control room.
-- `tests/test_authorization.py`: authorization, execution, retry, concurrency, failure and API checks.
-- `evals/control_eval.py`: the narrow semantic acceptance comparison.
-- `DEMO.md`: recording sequence, narration and claims to use.
-- `IMPLEMENTATION.md`: design choices, trust boundaries and prototype limitations.
+- `tollgate/authorization.py`: mandates, credentials, constraints, execution, reviews, and audit persistence.
+- `tollgate/semantic_policy.py` and `tollgate/policy_config.py`: Jev questions, policy validation, and decision composition.
+- `tollgate/policy_studio.py`: policy drafts, comparisons, versioning, activation, and auditor read access.
+- `tollgate/clients/jev.py`: Jev API client and typed response validation.
+- `tollgate/control_runner.py`: scripted rehearsal and Claude tool loop.
+- `tollgate/demo_server.py`: local server and authenticated API routes.
+- `dashboard/`: Control Room and Policy Studio interface.
+- `policies/`: policy examples and readable policy snapshots.
+- `tests/`, `agent/tests/`, and `evals/tests/`: automated checks.
+- `evals/`: evaluator code and synthetic datasets. Generated reports are ignored.
+- `examples/`: small agent integration example.
 
-The original `SPEC.md` and earlier `NOTES.md` entries document the first prototype. The new control-room path is additive and does not change its benchmark interfaces.
-
-## Verify
-
-```sh
-.venv/bin/python -m pytest
-node --check dashboard/control.js
-```
-
-Tests use mocked clients or the labeled offline reviewer. No test calls a paid API. The live demo is not production banking infrastructure: identity uses local bearer tokens, the ledger is synthetic, and all runtime state is stored in one local SQLite database.
-
-## Policy Studio
-
-Open **Policy Studio** in the Control Room to edit financial controls, typed Jev prompts and criteria, compare draft decisions, and activate tested versions for new mandates. See [the implementation plan](POLICY_STUDIO_IMPLEMENTATION_PLAN.md) and [recording guide](SHOWCASE.md). Optional `TOLLGATE_AUDITOR_TOKEN` grants read-only Studio access.
+The legacy engine and benchmark interfaces remain for provenance and are separate from the current authorization gateway.
