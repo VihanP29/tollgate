@@ -87,6 +87,7 @@ def test_policy_versions_do_not_change_existing_mandates():
 def test_full_adapter_preserves_fractional_score_and_distributions():
  _,record=evaluate(None,{'evidence':[]},PRESETS[0],True)
  response={k:record[k] for k in ('model','answers','usage')}
+ response.update(model='jev-1.14.0', usage={'input_tokens':12,'output_tokens':8})
  response['answers']['delivery_confirmation'].update(score=1.43,confidence=0.35,probabilities={'0':0.,'1':0.57,'2':0.43,'3':0.})
  client=JevClient('jev-1.14.0',0,transport=httpx.MockTransport(lambda req:httpx.Response(200,json=response)))
  result=client.evaluate_full({},QUESTIONS)

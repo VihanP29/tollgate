@@ -1,0 +1,1 @@
+"""Scoped external protocol adapters."""

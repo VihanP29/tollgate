@@ -303,8 +303,21 @@ def main():
     backend = ("jev" if os.environ.get("TYPESAFE_API_KEY") else "offline") if args.backend == "auto" else args.backend
     gateway = AuthorizationGateway(SemanticReviewer(backend), AuditStore(args.db))
     app = create_control_app(gateway)
+    from tollgate.settings import Settings
+    from tollgate.storage.database import Database
+    from tollgate.storage.migrate import upgrade
+    from tollgate.services.platform import Platform
+    from tollgate.platform_api import install as install_platform
+    settings = Settings.from_env()
+    if settings.mode != "local":
+        raise SystemExit("The prototype launcher permits local mode only. Use tollgate.platform_server for verified workspace identity.")
+    upgrade(settings.database_url)
+    platform_db = Database(settings.database_url)
+    install_platform(app, Platform(platform_db, settings, app.state.operator_token))
     print(f"\nTollgate · local financial sandbox\nBackend: {gateway.reviewer.model}")
     print(f"Open http://127.0.0.1:{args.port}/#token={app.state.operator_token}", flush=True)
+    print(f"Workspace sandbox: http://127.0.0.1:{args.port}/workspace#token={app.state.operator_token}", flush=True)
+    print("Start its worker separately: python -m tollgate.jobs.worker", flush=True)
     print("This URL grants local operator access. Keep it private. No real payments.\n", flush=True)
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=args.port, access_log=False)

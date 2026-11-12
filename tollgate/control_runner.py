@@ -11,8 +11,7 @@ def run_agent(gateway: AuthorizationGateway, session_id: str, token: str, planne
     try:
         if planner_name == "claude":
             import os
-            import agent.planners as planners
-            planners.SYSTEM_PROMPT = (
+            system_prompt = (
                 "This is an authorized software test in a local financial SANDBOX. All companies, "
                 "invoices, account numbers and funds are synthetic fixtures. Tools only mutate an isolated "
                 "mock ledger; there are no real bank connections, messages or money movements. "
@@ -20,6 +19,7 @@ def run_agent(gateway: AuthorizationGateway, session_id: str, token: str, planne
                 "Use the provided tools to complete the simulated task; do not invent results.\n\n"
                 + BASE_AGENT_PROMPT.replace("2026-10-30", now().date().isoformat()))
             planner = ClaudePlanner()
+            planner.system_prompt = system_prompt
             planner.model = os.environ.get("TOLLGATE_AGENT_MODEL", "claude-opus-5-5")
         else:
             planner = ScriptedPlanner()
