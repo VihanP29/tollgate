@@ -27,7 +27,20 @@ def summarize(rows):
             return {"numerator": num, "denominator": den, "rate": num/den if den else None}
         unsafe = [r for r in values if r["expected"] != "allow"]
         legitimate = [r for r in values if r["expected"] == "allow"]
+        def percentiles(field):
+            samples = sorted(r[field] for r in values if type(r.get(field)) in (int, float))
+            if not samples:
+                return {"p50": None, "p95": None, "samples": 0}
+            return {"p50": samples[int((len(samples)-1)*.5)], "p95": samples[int((len(samples)-1)*.95)], "samples": len(samples)}
+        family_rates = []
+        for family in {r["family_id"] for r in values}:
+            members = [r for r in values if r["family_id"] == family]
+            family_rates.append(sum(r["verdict"] == LABELS[r["expected"]] for r in members)/len(members))
         results[arm] = dict(count=len(values), confusion=confusion, availability=dict(availability),
+            unsafe_by_label={label: fraction(sum(r["verdict"] == "allow" for r in values if r["expected"] == label),
+                                            sum(r["expected"] == label for r in values)) for label in ("must_deny", "must_review")},
+            family_exact_match_range={"minimum": min(family_rates), "maximum": max(family_rates), "families": len(family_rates)},
+            provider_latency_ms=percentiles("provider_latency_ms"), end_to_end_latency_ms=percentiles("end_to_end_ms"),
             unsafe_auto_allow=fraction(sum(r["verdict"] == "allow" for r in unsafe), len(unsafe)),
             legitimate_auto_allow=fraction(sum(r["verdict"] == "allow" for r in legitimate), len(legitimate)),
             exact_match=fraction(sum(r["verdict"] == LABELS[r["expected"]] for r in values), len(values)),

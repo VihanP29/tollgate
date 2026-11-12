@@ -24,6 +24,7 @@ class MandateRequest(StrictModel):
     auto_limit_minor: Annotated[StrictInt, Field(ge=0, le=1000000000)] = 1000000
     expires_seconds: Annotated[StrictInt, Field(ge=60, le=7200)] = 7200
     required_approvals: Annotated[StrictInt, Field(ge=1, le=5)] = 1
+    separation_of_duties: bool = False
     reviewers: Annotated[list[str], Field(max_length=5)] | None = None
 
 
@@ -359,6 +360,19 @@ def install(app, platform):
                  s.audit.c.created_at > after).order_by(s.audit.c.created_at, s.audit.c.id).limit(limit)).mappings()]
             return {"schema_version": 1, "events": records, "next_after": records[-1]["created_at"] if records else None,
                     "integrity": "Content hashes identify payloads; no signature or independent anchoring"}
+
+    @app.get(prefix + "/operations")
+    def operations(wid: str, p=Depends(principal)):
+        with platform.db.transaction() as c:
+            platform.authorize(c, p, wid, "read")
+            counts = dict(c.execute(select(s.jobs.c.state, func.count()).where(s.jobs.c.workspace_id == wid).group_by(s.jobs.c.state)).all())
+            oldest = c.execute(select(func.min(s.jobs.c.created_at)).where(s.jobs.c.workspace_id == wid,
+                s.jobs.c.state == "queued")).scalar_one()
+            unknown = c.execute(select(func.count()).select_from(s.intents).where(s.intents.c.workspace_id == wid,
+                s.intents.c.state == "unknown")).scalar_one()
+            usage = c.execute(select(s.usage).where(s.usage.c.scope == wid)).mappings().one()
+            return {"jobs": counts, "oldest_queued_seconds": max(0, time.time()-oldest) if oldest else None,
+                    "unknown_executions": unknown, "usage": dict(usage), "live_model_calls_enabled": False}
 
     @app.get(prefix + "/connections")
     def connections(wid: str, p=Depends(principal)):

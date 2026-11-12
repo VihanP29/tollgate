@@ -39,6 +39,8 @@ class ProbeRequest(BaseModel):
 
 
 def create_control_app(gateway: AuthorizationGateway | None = None, operator_token: str | None = None) -> FastAPI:
+    if os.environ.get("TOLLGATE_MODE", "local") != "local":
+        raise ValueError("The shared operator prototype is available only in local mode")
     gateway = gateway or AuthorizationGateway()
     token = operator_token or os.environ.get("TOLLGATE_OPERATOR_TOKEN") or secrets.token_urlsafe(24)
     app = FastAPI(title="Tollgate · Authorization Control Room", docs_url=None, redoc_url=None)
@@ -277,19 +279,8 @@ def create_control_app(gateway: AuthorizationGateway | None = None, operator_tok
 
 
 def load_env(path: str | Path):
-    """Load known runtime settings without logging or copying secrets."""
-    path = Path(path)
-    if not path.exists():
-        return
-    allowed = {"TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
-               "TOLLGATE_OPERATOR_TOKEN", "TOLLGATE_AGENT_MODEL"}
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.removeprefix("export ").split("=", 1)
-        if key.strip() in allowed and value.strip():
-            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+    from tollgate.settings import load_env as load_settings_env
+    load_settings_env(path)
 
 
 def main():

@@ -1,9 +1,9 @@
 """A small persisted fixture runner, including outcomes across human review waits."""
 import time
-from sqlalchemy import select
+from sqlalchemy import select, func
 from tollgate.auth import Principal
 from tollgate.decision_context import ProposalV1, identity, utcnow
-from tollgate.services.platform import Conflict, new_id
+from tollgate.services.platform import Conflict, QuotaExceeded, new_id
 from tollgate.storage import schema as s
 from tollgate.storage.database import row, change
 
@@ -18,6 +18,8 @@ def start_run(platform, actor, wid, mid, request_id):
                             s.runs.c.request_id == request_id)).mappings().first()
         if existing:
             return dict(existing)
+        if c.execute(select(func.count()).select_from(s.runs).where(s.runs.c.workspace_id == wid)).scalar_one() >= platform.settings.max_runs:
+            raise QuotaExceeded("Workspace run allowance exhausted")
         rid = new_id("run")
         c.execute(s.runs.insert().values(workspace_id=wid, id=rid, mandate_id=mid, principal_id="service:"+rid,
             request_id=request_id, state="running", revision=1, step=0, created_at=time.time(), payload={"outcomes": {}, "mode": "scripted-fixtures"}))
@@ -70,4 +72,4 @@ def wake_runs(platform):
             outcomes = current["payload"]["outcomes"]
             changed = any(row(c, s.proposals, wid, r["proposal_id"])["state"] != r["state"] for r in outcomes.values())
             if changed:
-                platform.enqueue(c, wid, "run", run["id"], f"run:{run['id']}:{current['revision']}")
+                platform.enqueue(c, wid, "run", run["id"], f"run:{run['id']}:{current['revision']}", enforce_limit=False)

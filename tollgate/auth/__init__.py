@@ -24,12 +24,13 @@ class WorkspaceContext:
 
 
 PERMISSIONS = {
-    "owner": {"read", "operate", "review", "admin", "policy", "lab"},
-    "admin": {"read", "operate", "review", "admin", "policy", "lab"},
+    "owner": {"read", "operate", "review", "admin", "policy", "lab", "reset"},
+    "admin": {"read", "operate", "review", "admin", "policy", "lab", "reset"},
     "operator": {"read", "operate", "lab"},
     "reviewer": {"read", "review"},
     "auditor": {"read"},
     "agent": {"agent"},
+    "demo": {"read", "operate", "review", "policy", "lab", "reset"},
 }
 
 

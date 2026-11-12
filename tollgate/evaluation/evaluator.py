@@ -25,8 +25,12 @@ def hard_checks(value: DecisionInputV1, policy=None):
         args = action.model_dump(exclude={"tool"})
     session = SimpleNamespace(mandate=SimpleNamespace(**mandate), vendors=sources["vendors"],
                               ledger=[{"invoice_id": action.invoice_id}] if state["duplicate"] else [], events=[])
-    return [c.model_dump() for c in check_constraints(session, Proposal(tool=action.tool, args=args),
+    checks = [c.model_dump() for c in check_constraints(session, Proposal(tool=action.tool, args=args),
                 state["spent_minor"], state["reserved_minor"], evaluation_time=value.evaluation_time)]
+    if isinstance(action, Payment) and sources.get("source_revision") != sources.get("pinned_source_revision"):
+        checks.append(dict(id="source_revision", label="Invoice source changed after authorization", kind="constraint",
+                           outcome="fail", detail="Create fresh authority against the revised source; pinned snapshots are immutable"))
+    return checks
 
 
 def semantic_state(value):
@@ -40,6 +44,11 @@ def semantic_state(value):
                 evidence=[r for r in records if r["evidence_id"] not in superseded
                           and r.get("invoice_id") == getattr(value.action, "invoice_id", None)],
                 evidence_revision=value.evidence_revision,
+                financial_state=value.unpack("financial"),
+                approved_invoices=value.unpack("authority")["approved_invoices"],
+                approved_beneficiary_refs=list(value.unpack("authority")["beneficiaries"]),
+                source_revision=sources.get("source_revision"),
+                authority_revision=value.mandate_revision,
                 claims=[c.model_dump(mode="json") for c in value.claims])
 
 
@@ -66,12 +75,32 @@ def evaluate_input(value: DecisionInputV1, policy=None, backend="offline", clien
     policy = policy or value.unpack("policy")
     try:
         checks, data = evaluate(client, semantic_state(value), policy, offline=backend == "offline")
+        if data.get("request_hash"):
+            data["provider_payload_hash"] = data["request_hash"]
+        data.update(request_hash=request_identity(value, policy), requested_model=policy["model"], resolved_model=data["model"])
         return dict(verdict=verdict(hard + checks), checks=hard + checks, availability="available",
                     model_calls=int(backend != "offline"), usage=data["usage"],
-                    provider_latency_ms=data["latency_ms"], evaluation=data, request_hash=request_identity(value, policy))
+                    provider_latency_ms=data["latency_ms"] if backend != "offline" else None, evaluation=data, request_hash=request_identity(value, policy))
     except Exception:
         checks = hard + [dict(id="classifier_available", label="Required semantic evaluation unavailable",
                  kind="semantic", outcome="unavailable", detail="No automatic execution; retry or resolve evidence before reassessment")]
         return dict(verdict=verdict(checks), checks=checks, availability="unavailable", model_calls=int(backend != "offline"),
                     usage={}, provider_latency_ms=None, evaluation=None, request_hash=request_identity(value, policy),
                     error_code="semantic_unavailable")
+
+
+def evaluate_arm(value, policy, backend):
+    """Every comparison arm uses the identical captured state and candidate hard controls."""
+    hard = hard_checks(value, policy)
+    if backend == "hard_constraints":
+        return {"verdict": verdict(hard), "checks": hard, "availability": "intentionally_not_evaluated",
+                "model_calls": 0, "usage": {}, "provider_latency_ms": None,
+                "note": "Experimental ablation; not an operational policy"}
+    if backend == "general_llm_unavailable":
+        checks = hard if verdict(hard) == "deny" else hard + [dict(id="classifier_available", kind="semantic",
+                  outcome="unavailable", label="General LLM backend unavailable", detail="No model attempt; operational hold only")]
+        return {"verdict": verdict(checks), "checks": checks, "availability": "not_required" if verdict(hard) == "deny" else "unavailable",
+                "model_calls": 0, "usage": {}, "provider_latency_ms": None, "error_code": "general_llm_backend_not_configured"}
+    if backend == "jev_fixture":
+        return evaluate_input(value, policy)
+    raise ValueError("Comparison backend unavailable")

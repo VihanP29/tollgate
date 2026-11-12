@@ -40,6 +40,8 @@ class ExecutionService:
                         s.resolutions.c.review_id == review["id"], s.resolutions.c.resolution == "approve")).scalars().all()
                     valid = valid and len(set(approvals)) >= review["required_approvals"]
                     for actor in approvals:
+                        if review["rule"].get("separation_of_duties") and actor == review["rule"]["mandate_creator"]:
+                            valid = False
                         try:
                             gateway.authorize(c, Principal(actor), wid, "review")
                         except LookupError:

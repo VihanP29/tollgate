@@ -93,7 +93,7 @@ audit = owned("audit_events", C("actor_id", S(200), nullable=False), C("kind", S
 experiments = owned("experiments", C("created_by", S(200), nullable=False), C("state", S(30), nullable=False),
                     C("manifest_hash", S(64), nullable=False), C("manifest", JSON, nullable=False), C("created_at", Float, nullable=False))
 experiment_rows = owned("experiment_rows", C("experiment_id", S(120), nullable=False), C("case_id", S(120), nullable=False),
-                        C("arm", S(30), nullable=False), C("payload", JSON, nullable=False), ref("experiment_id", "experiments"),
+                        C("arm", S(120), nullable=False), C("payload", JSON, nullable=False), ref("experiment_id", "experiments"),
                         UQ("workspace_id", "experiment_id", "case_id", "arm"))
 shadows = owned("shadow_subscriptions", C("policy_id", S(120), nullable=False), C("enabled", Boolean, nullable=False),
                C("created_at", Float, nullable=False), ref("policy_id", "policy_versions"))

@@ -121,3 +121,153 @@ The evaluator writes generated output locally; those result files are ignored by
 - `examples/`: small agent integration example.
 
 The legacy engine and benchmark interfaces remain for provenance and are separate from the current authorization gateway.
+
+## Workspace platform: implemented offline path
+
+The project now also has a relational workspace application at `/workspace`, with `/api/v1` contracts. This is an incremental implementation of the handoff, **not completion of Releases A and B**. The existing Control Room and Policy Studio remain available through the original launcher and retain their separate local prototype database. Their credentials and ledger are not automatically imported into a workspace.
+
+The workspace path includes:
+
+- Server-side membership checks, roles, isolated synthetic companies, and hashed, expiring, revocable mandate-scoped agent credentials. Hosted demo identities have bounded demo permissions and cannot administer memberships.
+- Integer USD minor-unit proposals, immutable `DecisionInputV1` captures, exact-payload idempotency, and invoice payment claims shared across mandates within a company generation.
+- Database transactions for budgets and reservations, persisted evaluation jobs, execution intents, attempts, and authoritative mock receipts. Semantic evaluation runs outside financial transactions. PostgreSQL serializes short financial writes on the workspace row; SQLite uses database write transactions for local compatibility.
+- Assigned reviews with optimistic revisions, distinct eligible approvers, optional separation of duties, comments, and evidence/authority/policy/approval-rule bindings. Current eligibility and financial authority are checked again before dispatch.
+- A persisted fixture runner with stable run/tool-call request IDs and stored outcomes. It waits across restarts and resumes after a review resolves. A finished run does not imply every invoice was paid.
+- Scoped REST and official-SDK local stdio MCP clients. Agent responses omit internal snapshots, bank records, review internals, and downstream credentials.
+- A fixture Evaluation Lab, immutable experiment manifests, partial/cancelled run inspection, three-class metrics, and asynchronous shadow comparisons using the same canonical evaluator. Candidate financial controls apply equally to its hard-only, general-judge, and typed-policy comparison arms.
+- Alembic migrations, explicit read-only legacy archive import, Docker/Compose artifacts, liveness/readiness probes, structured operational events, and payload-free OpenTelemetry API span hooks.
+
+### Start the workspace application
+
+Install the exact tested dependency set and migrate the new database:
+
+```sh
+.venv/bin/python -m pip install -r requirements.lock
+.venv/bin/python -m alembic upgrade head
+.venv/bin/python -m tollgate.platform_server --embedded-worker
+```
+
+Open the private workspace URL printed by the launcher. `--embedded-worker` is a single-process, local-only convenience; jobs and checkpoints still live in the database. The browser removes the credential fragment and keeps this application's token in memory. Reloading requires the private link or sign-in again. The original Control Room/Studio continue to use their existing tab-session credential storage.
+
+For separate API and worker processes, omit `--embedded-worker` and run this in another terminal:
+
+```sh
+.venv/bin/python -m tollgate.jobs.worker
+```
+
+Both launchers and the worker load documented `.env` settings; exported environment values win. Alembic reads only `DATABASE_URL` from `.env`. The default workspace database is `.runtime/platform.sqlite`; the original launcher still uses `.runtime/control.sqlite`. No migration automatically copies the latter. SQLite is a local workstation option: use one API and one worker, or the embedded worker. Hosted and multi-worker deployments require PostgreSQL.
+
+The original `python -m tollgate.demo_server` launcher also installs the workspace routes in local mode, migrates the separate workspace database, and prints its workspace URL. Start its workspace worker separately. Its existing optional live-provider paths remain local prototype functionality, separate from the new workspace capability gates.
+
+### Offline acceptance walkthrough
+
+1. Create a synthetic workspace, then authorize a mandate with selected invoices, a budget, an automatic limit, and a pinned policy. Defaults are $60,000 and $10,000. Existing beneficiary destinations are pinned server-side.
+2. Run the fixture agent. The complete six-invoice batch produces three confirmed mock payments, one delivery-dispute denial, and two assigned reviews: missing receiving confirmation and a payment above the automatic limit.
+3. Inspect a proposal to see deterministic checks, typed fixture answers, captured inputs, submitting identity, and its receipt. A queued proposal has not executed.
+4. On `INV-7002`, append a receiving assertion such as “Receiving confirms complete delivery for INV-7002; all goods accepted.” The previous review becomes stale and releases its reservation. Explicitly reassess the old proposal to evaluate the new evidence and obtain a fresh result. These receiving records are operator assertions, not independently authenticated external documents.
+5. In Connections, issue a scoped credential for the mandate. Save the displayed configuration once; closing its dialog clears the displayed secret. Run the external REST example or MCP client below.
+6. In the Lab, save an immutable candidate with `require_confirmation: false` and a distinct name. Compare it with the original version on the public synthetic development split. Enable it as a shadow candidate before submitting a fresh missing-confirmation proposal in a fresh synthetic generation: the active policy reviews it while the candidate allows it. The shadow result cannot execute or alter its reservation.
+7. Approve an eligible assigned review, or reject it to release its reservation. Evidence changes, revoked/expired authority, duplicate claims, stale revisions, or ineligible approvers prevent dispatch. Multi-person rules require separately authenticated eligible people; multiple clicks from one actor cannot satisfy them.
+
+Synthetic reset is available through `POST /api/v1/workspaces/{wid}/reset` with `expected_revision`. It creates a new company generation, revokes old mandates/credentials, cancels undispatched work, retains history, and preserves usage counters. It is refused while dispatched/submitted/unknown intents need reconciliation. A fresh mandate in the **same** generation cannot pay an already claimed invoice again; a deliberately reset generation is a new synthetic company. Limits include three workspaces per identity, 500 total workspaces, five resets, 500 proposals per workspace, 20 runs/experiments, 20-job admission and concurrency ceilings in each workspace operational/evaluation pool, 100 concurrent jobs globally, five shadow subscriptions, 100 policy versions, and 12 evidence items per invoice per generation. Accepted work may enqueue follow-up execution/checkpoint jobs beyond its admission queue ceiling so a full queue cannot deadlock its outbox; concurrent running work stays database-bounded. Configurable ceilings are documented in `.env.example`.
+
+### External agents
+
+Use only the issued agent credential, never the local operator token:
+
+```sh
+export TOLLGATE_BASE_URL=http://127.0.0.1:8765
+export TOLLGATE_WORKSPACE_ID='workspace ID from Connections'
+export TOLLGATE_MANDATE_ID='mandate ID from Connections'
+export TOLLGATE_AGENT_TOKEN='issued scoped agent secret'
+export TOLLGATE_RUN_KEY='a caller-owned stable run identifier'
+.venv/bin/python -m examples.scoped_agent
+```
+
+`tollgate.client.TollgateClient` provides `submit`, `get`, `wait`, approved resource reads, and receipt reads. `wait` returns structured review/deny/unknown outcomes; a polling timeout or cancellation does not cancel accepted financial work. Persist proposal IDs and reuse the exact request ID and payload after transport failures. Changing an amount, destination, claims, or other submitted fields under an existing request ID returns conflict.
+
+For an independently hosted agent's MCP configuration, use the one-time Connections configuration or launch:
+
+```sh
+.venv/bin/python -m tollgate.integrations.mcp
+```
+
+It uses the official MCP SDK over stdio and the same scoped REST service. Its catalog contains only approved invoice/vendor reads, payment proposals, proposal status, and authorized receipts. Pending review does not execute; agents can continue other eligible invoices and poll after reconnecting. Hosted Streamable HTTP OAuth/resource-audience integration is **not implemented**.
+
+Credential revocation immediately blocks new submissions and polling with that credential. It leaves accepted jobs intact. Mandate revocation additionally cancels undispatched work and pending reviews. Dispatch is a committed boundary: an already dispatched operation follows reconciliation and retains its claim until its outcome is known. The mock executor safely reproduces the same logical result using its stable intent key. No exactly-once guarantee is made for remote effects, and no remote financial executor is connected.
+
+### Lab reproducibility and limits
+
+```sh
+.venv/bin/python -m evals.gateway_eval --split development
+.venv/bin/python -m evals.gateway_eval --split held_out --output .runtime/gateway-held-out-fixtures.json
+```
+
+These commands have no executor/database capability and make zero paid calls. They write ignored local reports. The versioned manifest is `evals/data/current_gateway_v1.json`: 120 distinct synthetic inputs, 24 grouped families, an 80/40 split, and at least ten provisional examples of each expected class per split. Labels and adjudication metadata are excluded from provider inputs. All labels are **unreviewed**; the public synthetic held-out split is not a hidden, independently adjudicated acceptance set.
+
+The fixture backend has known language limitations, including contradictory and partial receiving cases. Its failures remain visible. Fixture results do not establish live Jev performance, document authenticity, or production safety. The general LLM arm is explicitly unavailable, rather than replaced with a fabricated prediction. Operational fail-closed holds can match a desired workflow outcome; they are excluded from available-answer semantic accuracy. Metrics include confusion matrices, per-label unsafe allowances, intervention rates, availability, subgroup denominators, family ranges, and observed timing. Pricing remains unavailable. Fixture timing cannot establish provider latency or cost.
+
+Every experiment freezes its inputs, policies, compiler/contracts, split/case hashes, and arm configuration. Experiments can be cancelled, retain partial rows, and expose authorized JSON results. Shadows capture the pre-action input and use a restricted evaluation repository interface; this is an application capability boundary, not a claim of a separate PostgreSQL database role. Shadow quota exhaustion cannot roll back an operational verdict. Deeper Lab results do not silently replace the four-case development admission used for offline policy activation.
+
+The shared Jev full-response adapter validates exact pinned model identity, response/answer shapes, expected question IDs/types, finite bounds, distribution labels and sums, Choice maximum consistency, Score weighted-mean consistency, supplied legends, and nonnegative integer token usage. Distribution/Choice tolerance is 0.02; Score tolerance is 0.02 times the number of levels. Missing legends remain compatible with older responses; supplied legends must match. Confidence is bounded without assuming an undocumented formula. Fractional Scores and the legacy client adapter are preserved. See the provider's [Score contract](https://docs.typesafe.ai/primitives/score) and [Choice contract](https://docs.typesafe.ai/primitives/choice).
+
+### Containers, migrations, and recovery
+
+`compose.yaml` supplies PostgreSQL, migrations, API, and a separate worker. It binds the API to host loopback only, uses a synthetic local database password, and requires a private operator token:
+
+```sh
+export TOLLGATE_OPERATOR_TOKEN="$(.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+docker compose build api
+docker compose up -d --no-build
+```
+
+Open `http://127.0.0.1:8765/workspace` and enter that token. Use `docker compose logs worker` for safe error codes and `GET /health/ready` to check schema and worker heartbeat. `/health/live` does not query providers. Authorized `/api/v1/workspaces/{wid}/operations` exposes job states, queue age, unknown executions, and usage counters without evidence or credentials. SIGTERM stops workers from claiming new work and lets the current bounded handler finish. Expired leases recover accepted work after a crash. Failed jobs expose safe error codes; exhausted evaluations hold proposals, and partial experiments remain inspectable.
+
+Before changing schemas: stop new submissions, drain/stop workers, back up the database, run `alembic upgrade head`, then restart workers and API. Migrations are versioned through `0003_lab_arms`. The legacy source database is never modified. Explicit archive import is dry-run first:
+
+```sh
+.venv/bin/python -m tollgate.storage.legacy_import .runtime/control.sqlite WORKSPACE_ID
+.venv/bin/python -m tollgate.storage.legacy_import .runtime/control.sqlite WORKSPACE_ID --apply
+```
+
+The importer reconciles receipt amounts/counts, preserves source IDs and exact source JSON hashes/history, and skips identical archives on retry. Archives are read-only and do not invent canonical financial state, executable mandates, or resumable reviews. Back up SQLite with its backup API while writes are stopped, rather than copying a live database file. For the local Compose database:
+
+```sh
+mkdir -p .runtime
+docker compose exec -T postgres pg_dump -U tollgate -Fc tollgate > .runtime/tollgate-backup.dump
+```
+
+Test a restore into a new empty database using `pg_restore` and the matching application/schema version before replacing service state. Keep backups private. Roll back application code only with a compatible schema; otherwise restore the matching backup during downtime. Never truncate longer experiment identities or financial history to force a downgrade. Review restored credentials, leases, reservations, and unknown intents before accepting submissions. Restoring a database is not proof that an external operation failed. Unknown/submitted intents must be reconciled by stable provider operation/idempotency identity before claims can be released; do not blindly retry a remote write. Only the mock executor is currently wired.
+
+### Verification and remaining work
+
+The implementation has exercised SQLite fixture acceptance, independent PostgreSQL process races, an independent official-SDK MCP handshake through a real local HTTP listener, and local browser flows. The exact verification record and milestone limitations are in `docs/platform-implementation.json`.
+
+Run the complete offline suite and JavaScript checks:
+
+```sh
+.venv/bin/python -m pytest
+node --check dashboard/control.js
+node --check dashboard/studio.js
+node --check dashboard/workspace.js
+node --check dashboard/api.js
+node --check dashboard/auth.js
+node --check dashboard/shell.js
+```
+
+Optional tests use disposable local infrastructure, never paid models:
+
+```sh
+docker run -d --rm --name tollgate-postgres-test \
+  -e POSTGRES_PASSWORD=tollgate-test -e POSTGRES_DB=tollgate_test \
+  -p 127.0.0.1:55432:5432 postgres:17
+TOLLGATE_TEST_POSTGRES_URL='postgresql+psycopg://postgres:tollgate-test@127.0.0.1:55432/tollgate_test' \
+  .venv/bin/python -m pytest tests/test_postgres.py
+TOLLGATE_RUN_MCP_INTEGRATION=1 .venv/bin/python -m pytest tests/test_mcp_integration.py
+```
+
+PostgreSQL tests create and remove only random test schemas. MCP integration starts a temporary loopback HTTP server and independent stdio process. Tests without these flags skip those integration suites explicitly.
+
+Outstanding release requirements are substantial: provider-backed browser sign-in/refresh and hosted revocation verification, hosted MCP OAuth, reviewed semantic admission and a configured general LLM arm, database-enforced live call/token reservations, full OTLP export/context propagation, private retention cleanup, scoped Studio draft migration, richer review assignment UI, Jev claim verification, QuickBooks sandbox OAuth/import/writeback/reconciliation, and the read-only vision inspector. Those integrations are not represented as working adapters. The JWT adapter verifies issuer/audience/signature/expiry/allowed algorithms using PyJWT and checks database membership on requests, but provider session logout/revocation behavior has not been verified. Organization onboarding and public hosting are not deployed.
+
+New platform live Jev/live agent/enforcing-claims/vision flags fail startup when enabled; credentials alone cannot enable paid workspace execution. Call/token setting names and counters reserve the future usage contract and are not advertised as a functioning live budget service. Claims currently reject rather than being silently ignored. Accounting reports unavailable. The existing static Site was not changed. There were no paid provider calls, external accounting operations, or public deployments in this implementation session.

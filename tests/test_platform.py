@@ -315,7 +315,7 @@ def test_lab_no_mutations_and_general_judge_unavailable_not_accuracy(platform):
     result = experiment_result(platform, owner, wid, e['id'])
     assert result['state'] == 'completed' and len(result['rows']) == 240
     assert not result['manifest']['admission_eligible']
-    general = result['metrics']['general_llm_unavailable']
+    general = next(v for k,v in result['metrics'].items() if k.startswith('general_llm_unavailable:'))
     assert general['semantic_available_match']['denominator'] == 0 and general['availability']['unavailable'] > 0
     with platform.db.transaction() as c:
         assert row(c, s.mandates, wid, mid) == before
@@ -416,7 +416,7 @@ def test_api_role_denial_origin_and_bounds(platform):
     ah = {'Authorization':'Bearer '+credential['agent_token']}
     assert c.get(url+'/invoices',headers=ah).status_code == 404
     assert c.get(url+f'/mandates/{m}/invoices',headers=ah).status_code == 200
-    assert c.post(url+'/policies',headers=ah,json={'bundle':{}}).status_code == 422
+    assert c.post(url+'/policies',headers=ah,json={'bundle':{}}).status_code == 404
     assert c.post(url+'/memberships',headers=ah,json={'actor_id':'evil','role':'admin'}).status_code == 404
     assert c.get(url+'/agent-credentials',headers=ah).status_code == 404
     assert c.get(url+'/connections',headers=ah).status_code == 404
@@ -450,3 +450,93 @@ def test_reset_generation_preserves_history_and_duplicate_identity(platform):
     assert count(platform,s.receipts,wid) == 2
     with platform.db.transaction() as c:
         assert row(c,s.inputs,wid,snapshot['id']) == snapshot
+
+
+def test_single_process_local_launch_uses_durable_jobs(platform):
+    owner,wid,mid,agent,credential=setup(platform)
+    with TestClient(create_app(platform.settings,platform.db,'op',embedded_worker=True)) as c:
+        result=platform.submit(agent,wid,mid,payment())
+        deadline=time.monotonic()+5
+        while time.monotonic()<deadline:
+            current=platform.proposal(agent,wid,result['id'])
+            if current['state']=='confirmed':break
+            time.sleep(.02)
+        assert current['state']=='confirmed'
+        assert c.get('/health/ready').status_code==200
+
+
+def test_claim_payload_changes_conflict_even_when_claims_disabled(platform):
+    owner,wid,mid,agent,_=setup(platform)
+    original=payment();platform.submit(agent,wid,mid,original)
+    changed=ProposalV1.model_validate({**original.model_dump(mode='json'),'claims':[dict(claim_id='c1',role='delivery_confirmation',
+        statement='All goods were accepted.',invoice_id='INV-1042',source_ids=[])]})
+    with pytest.raises(Conflict):platform.submit(agent,wid,mid,changed)
+
+
+def test_hosted_cannot_start_shared_local_prototype(monkeypatch):
+    from tollgate.demo_server import create_control_app
+    monkeypatch.setenv('TOLLGATE_MODE','hosted')
+    with pytest.raises(ValueError):create_control_app(operator_token='shared')
+
+
+def test_hosted_demo_has_no_administrative_capability(platform):
+    hosted=Settings(mode='hosted',database_url='postgresql+psycopg://unused/unused',public_origin='https://app.example',
+        identity_issuer='https://identity.example',identity_audience='tollgate',identity_jwks_url='https://identity.example/jwks')
+    sandbox=Platform(platform.db,hosted)
+    actor=Principal('jwt:demo-user');wid=sandbox.provision(actor,'demo')['id']
+    assert sandbox.workspaces(actor)[0]['role']=='demo'
+    with sandbox.db.transaction() as c:
+        with pytest.raises(LookupError):sandbox.authorize(c,actor,wid,'admin')
+        assert sandbox.authorize(c,actor,wid,'operate').role=='demo'
+
+
+def test_full_admission_pool_does_not_prevent_accepted_outbox_handoff(platform):
+    owner,wid,mid,agent,_=setup(platform)
+    bounded=Platform(platform.db,Settings(database_url=platform.settings.database_url,max_jobs=1),'op')
+    result=bounded.submit(agent,wid,mid,payment())
+    with pytest.raises(QuotaExceeded):bounded.submit(agent,wid,mid,payment('another'))
+    drain(bounded)
+    assert bounded.proposal(agent,wid,result['id'])['state']=='confirmed'
+
+
+def test_shadow_admission_exhaustion_cannot_roll_back_payment(platform):
+    owner,wid,mid,agent,_=setup(platform)
+    bounded=Platform(platform.db,Settings(database_url=platform.settings.database_url,max_jobs=1),'op')
+    policy=bounded.list_resources(owner,wid,s.policies)[0]['id']
+    subscribe_shadow(bounded,owner,wid,policy)
+    with bounded.db.transaction(wid) as c:
+        bounded.enqueue(c,wid,'experiment','non-running-fixture','filled-evaluation-pool')
+    result=bounded.submit(agent,wid,mid,payment())
+    worker=Worker(bounded)
+    worker.tick();worker.tick()  # operational decisions and execution precede evaluation work
+    assert bounded.proposal(agent,wid,result['id'])['state']=='confirmed'
+    assert count(bounded,s.receipts,wid)==1
+
+
+def test_sqlite_backup_restores_receipts_and_canonical_history(platform,tmp_path):
+    import sqlite3
+    owner,wid,mid,agent,_=setup(platform)
+    result=platform.submit(agent,wid,mid,payment());drain(platform)
+    before=platform.proposal(owner,wid,result['id'])
+    backup=tmp_path/'restored.sqlite'
+    with sqlite3.connect(platform.db.engine.url.database) as source,sqlite3.connect(backup) as target:
+        source.backup(target)
+    restored=Platform(Database('sqlite:///'+str(backup)),Settings(database_url='sqlite:///'+str(backup)),'op')
+    assert restored.db.ready()
+    after=restored.proposal(owner,wid,result['id'])
+    assert after['receipt']==before['receipt'] and after['input_history']==before['input_history']
+    restored.db.dispose()
+
+
+def test_failed_legacy_import_rolls_back_prior_archives(platform,tmp_path):
+    owner,wid,mid,agent,_=setup(platform)
+    path=tmp_path/'legacy-failure.sqlite'
+    g=AuthorizationGateway(store=AuditStore(str(path)));g.create();second,_=g.create()
+    with g.store.db:
+        g.store.db.execute('INSERT INTO control_history (session_id,at,kind,payload) VALUES (?,?,?,?)',
+                           (second.session_id,'2026-11-12','invalid_fixture','invalid-json'))
+    before=path.read_bytes()
+    with pytest.raises(ValueError):import_legacy(platform.db,path,wid,True)
+    assert count(platform,s.legacy,wid)==0 and path.read_bytes()==before
+    with g.store.db:g.store.db.execute("DELETE FROM control_history WHERE kind='invalid_fixture'")
+    assert import_legacy(platform.db,path,wid,True)['new_archives']==2

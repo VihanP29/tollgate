@@ -74,7 +74,7 @@ class Platform:
             c.execute(s.workspaces.insert().values(id=wid, creator_id=p.actor_id, provision_key=request_id, generation=generation,
                       created_at=timestamp, expires_at=timestamp + 86400 * (30 if self.settings.mode == "local" else 1),
                       revision=1, active_policy_id=None))
-            c.execute(s.memberships.insert().values(workspace_id=wid, actor_id=p.actor_id, role="owner", active=True))
+            c.execute(s.memberships.insert().values(workspace_id=wid, actor_id=p.actor_id, role="owner" if self.settings.mode == "local" else "demo", active=True))
             c.execute(s.usage.insert().values(scope=wid, calls=0, tokens=0))
             bundle = migrate(PRESETS[0])
             c.execute(s.policies.insert().values(workspace_id=wid, id=bundle["id"], content_hash=bundle["hash"], payload=bundle,
@@ -97,7 +97,7 @@ class Platform:
 
     @traced("tollgate.authority.create")
     def create_mandate(self, p, wid, invoice_ids, budget_minor, auto_limit_minor, expires_seconds=7200,
-                       required_approvals=1, reviewers=None):
+                       required_approvals=1, reviewers=None, separation_of_duties=False):
         with self.db.transaction(wid) as c:
             self.authorize(c, p, wid, "operate")
             workspace = c.execute(select(s.workspaces).where(s.workspaces.c.id == wid)).mappings().one()
@@ -120,6 +120,8 @@ class Platform:
             reviewers = reviewers or [p.actor_id]
             if len(set(reviewers)) != len(reviewers) or not 1 <= required_approvals <= len(reviewers) <= 5:
                 raise ValueError("Approval rule requires distinct assigned eligible reviewers")
+            if separation_of_duties and p.actor_id in reviewers:
+                raise ValueError("Separation of duties requires reviewers other than the mandate creator")
             for actor in reviewers:
                 self.authorize(c, Principal(actor), wid, "review")
             mid = new_id("mandate")
@@ -132,7 +134,8 @@ class Platform:
                 authority["task"] += " Require eligible receiving confirmation of complete delivery."
             payload = {"authority": authority, "invoices": {i["id"]: i["payload"] for i in selected},
                        "source_revisions": {i["id"]: i["revision"] for i in selected},
-                       "approval_rule": {"reviewers": reviewers, "required_approvals": required_approvals}}
+                       "approval_rule": {"version": 1, "reviewers": reviewers, "required_approvals": required_approvals,
+                           "separation_of_duties": separation_of_duties, "mandate_creator": p.actor_id}}
             c.execute(s.mandates.insert().values(workspace_id=wid, id=mid, revision=1, generation=workspace["generation"],
                 policy_id=policy["id"], created_by=p.actor_id, created_at=stamp.timestamp(),
                 expires_at=datetime.fromisoformat(authority["expires_at"]).timestamp(), revoked=False,
@@ -171,7 +174,7 @@ class Platform:
                     raise LookupError("Resource unavailable")
                 self.authorize(c, p, wid, "agent", mid)
             else:
-                self.authorize(c, p, wid, "read")
+                self.authorize(c, p, wid, "operate" if table == s.credentials else "read")
             query = select(table).where(table.c.workspace_id == wid)
             if table in {s.invoices, s.vendors} and mid:
                 mandate = row(c, s.mandates, wid, mid)
@@ -188,8 +191,9 @@ class Platform:
                 self.audit(c, wid, p.actor_id, "scoped_resource_read", mid, {"resource_type": table.name})
                 if table == s.vendors:
                     return [{"id": item["id"], "name": item["payload"]["name"], "beneficiary_ref": item["id"]} for item in rows]
-                return [{"id": item["id"], "amount_minor": item["amount_minor"], "currency": "USD",
-                         "beneficiary_ref": item["vendor_id"], "text": item["payload"]["text"]} for item in rows]
+                return [{"id": item["id"], "amount_minor": authority["approved_invoices"][item["id"]]["amount_cents"], "currency": "USD",
+                         "beneficiary_ref": authority["approved_invoices"][item["id"]]["vendor_id"],
+                         "text": mandate["payload"]["invoices"][item["id"]]["text"]} for item in rows]
             return rows
 
     def capture(self, c, wid, proposal):
@@ -199,6 +203,7 @@ class Platform:
         iid = getattr(action, "invoice_id", None)
         invoice = row(c, s.invoices, wid, iid, required=False) if iid else None
         authority = copy.deepcopy(mandate["payload"]["authority"])
+        authority["approval_rule"] = mandate["payload"]["approval_rule"]
         authority["revoked"] = mandate["revoked"]
         authority["expires_at"] = datetime.fromtimestamp(mandate["expires_at"], timezone.utc).isoformat()
         # Include only the proposed, approved invoice; never a workspace catalog.
@@ -235,14 +240,14 @@ class Platform:
         change(c, s.proposals, wid, pid, input_id=iid)
         return iid
 
-    def enqueue(self, c, wid, kind, resource_id, key):
+    def enqueue(self, c, wid, kind, resource_id, key, enforce_limit=True):
         old = c.execute(select(s.jobs.c.id).where(s.jobs.c.workspace_id == wid, s.jobs.c.logical_key == key)).first()
         if old:
             return old[0]
         active = c.execute(select(func.count()).select_from(s.jobs).where(s.jobs.c.workspace_id == wid,
                  s.jobs.c.state.in_(["queued", "running"]),
                  s.jobs.c.kind.in_(["shadow", "experiment"]) if kind in {"shadow", "experiment"} else s.jobs.c.kind.not_in(["shadow", "experiment"]))).scalar_one()
-        if active >= self.settings.max_jobs:
+        if enforce_limit and active >= self.settings.max_jobs:
             raise QuotaExceeded("Workspace active-job limit reached")
         jid = new_id("job")
         c.execute(s.jobs.insert().values(workspace_id=wid, id=jid, kind=kind, object_id=resource_id, logical_key=key,
@@ -263,6 +268,9 @@ class Platform:
                 if old["principal_id"] != p.actor_id:
                     raise LookupError("Resource unavailable")
                 return self._proposal_view(c, p, wid, dict(old))
+            accepted_count = c.execute(select(func.count()).select_from(s.proposals).where(s.proposals.c.workspace_id == wid)).scalar_one()
+            if accepted_count >= self.settings.max_proposals:
+                raise QuotaExceeded("Workspace proposal allowance exhausted; identical retries and inspection remain available")
             if body.claims:
                 if self.settings.claims_mode == "off":
                     raise ValueError("Claims are disabled")
@@ -285,7 +293,7 @@ class Platform:
             elif not isinstance(body.action, Payment):
                 change(c, s.proposals, wid, pid, state="confirmed", verdict="allow", checks=checks)
             else:
-                self.enqueue(c, wid, "evaluate", pid, "evaluate:" + pid + ":0")
+                self.enqueue(c, wid, "evaluate", pid, "evaluate:" + pid + ":0", enforce_limit=p.kind != "service")
             self.audit(c, wid, p.actor_id, "proposal_accepted", pid, {"payload_hash": fingerprint, "credential_id": p.credential_id})
             return self._proposal_view(c, p, wid, row(c, s.proposals, wid, pid))
 
@@ -371,7 +379,7 @@ class Platform:
                     self._save_input(c, wid, pid, current)
                     n = proposal["rechecks"] + 1
                     change(c, s.proposals, wid, pid, rechecks=n)
-                    self.enqueue(c, wid, "evaluate", pid, f"evaluate:{pid}:{n}")
+                    self.enqueue(c, wid, "evaluate", pid, f"evaluate:{pid}:{n}", enforce_limit=False)
             else:
                 combined = checks + [ch for ch in result["checks"] if ch["kind"] == "semantic"]
                 outcome = verdict(combined)
@@ -438,14 +446,14 @@ class Platform:
         intent_id = new_id("intent")
         c.execute(s.intents.insert().values(workspace_id=wid, id=intent_id, proposal_id=pid, provider_key=new_id("tollgate"), state="queued"))
         change(c, s.proposals, wid, pid, state="queued")
-        self.enqueue(c, wid, "execute", intent_id, "execute:" + intent_id)
+        self.enqueue(c, wid, "execute", intent_id, "execute:" + intent_id, enforce_limit=False)
 
     @traced("tollgate.review.resolve")
     def resolve(self, p, wid, rid, resolution, expected_revision, comment=""):
         with self.db.transaction(wid) as c:
             self.authorize(c, p, wid, "review")
             review = row(c, s.reviews, wid, rid)
-            if p.actor_id not in review["rule"]["reviewers"]:
+            if p.actor_id not in review["rule"]["reviewers"] or (review["rule"].get("separation_of_duties") and p.actor_id == review["rule"]["mandate_creator"]):
                 raise LookupError("Resource unavailable")
             if review["revision"] != expected_revision or review["state"] != "awaiting_review":
                 raise Conflict("Review revision/state changed")
@@ -562,7 +570,7 @@ class Platform:
 
     def reset_synthetic(self, p, wid, expected_revision):
         with self.db.transaction(wid) as c:
-            self.authorize(c, p, wid, "admin")
+            self.authorize(c, p, wid, "reset")
             workspace = c.execute(select(s.workspaces).where(s.workspaces.c.id == wid)).mappings().one()
             if workspace["revision"] != expected_revision:
                 raise Conflict("Workspace revision changed")

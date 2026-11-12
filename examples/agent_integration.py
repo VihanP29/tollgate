@@ -17,7 +17,7 @@ class ActionDenied(Exception):
 
 
 class TollgateTools:
-    def __init__(self, session_id: str, agent_token: str, base_url: str = "http://127.0.0.1:8000"):
+    def __init__(self, session_id: str, agent_token: str, base_url: str = "http://127.0.0.1:8765"):
         self.session_id = session_id
         self.client = httpx.Client(base_url=base_url, timeout=30,
                                    headers={"Authorization": "Bearer " + agent_token})

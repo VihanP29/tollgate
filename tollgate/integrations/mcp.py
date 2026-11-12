@@ -1,9 +1,11 @@
 """Official MCP SDK stdio adapter using only a scoped Tollgate REST credential."""
 import os
 from datetime import date
+from typing import Annotated
+from pydantic import StrictInt, Field
 from mcp.server.fastmcp import FastMCP
-from tollgate.client import TollgateClient
-from tollgate.decision_context import Payment
+from tollgate.client import TollgateClient, ProposalStatus, ReceiptView
+from tollgate.decision_context import Payment, Identifier
 
 
 def create_mcp(client):
@@ -28,8 +30,8 @@ def create_mcp(client):
         return client.vendors()
 
     @server.tool()
-    def propose_invoice_payment(request_id: str, invoice_id: str, amount_minor: int,
-                                beneficiary_ref: str, scheduled_date: date) -> dict:
+    def propose_invoice_payment(request_id: Identifier, invoice_id: Identifier, amount_minor: Annotated[StrictInt, Field(gt=0, le=1000000000)],
+                                beneficiary_ref: Identifier, scheduled_date: date) -> ProposalStatus:
         """Propose one whole USD invoice payment. Reuse request_id for identical retries.
 
         Pending evaluation/review is not execution. Continue other eligible invoices
@@ -37,17 +39,17 @@ def create_mcp(client):
         """
         action = Payment(invoice_id=invoice_id, amount_minor=amount_minor, beneficiary_ref=beneficiary_ref,
                          scheduled_date=scheduled_date)
-        return client.submit(request_id, action).model_dump(mode="json")
+        return client.submit(request_id, action)
 
     @server.tool()
-    def get_proposal_status(proposal_id: str) -> dict:
+    def get_proposal_status(proposal_id: str) -> ProposalStatus:
         """Poll a proposal submitted by this credential; review/deny are domain outcomes."""
-        return client.get(proposal_id).model_dump(mode="json")
+        return client.get(proposal_id)
 
     @server.tool()
-    def get_authorized_receipt(receipt_id: str) -> dict:
+    def get_authorized_receipt(receipt_id: str) -> ReceiptView:
         """Read a confirmed mock executor receipt. It is not evidence of bank settlement."""
-        return client.receipt(receipt_id)
+        return ReceiptView.model_validate(client.receipt(receipt_id))
 
     return server
 

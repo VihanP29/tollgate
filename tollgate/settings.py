@@ -23,6 +23,9 @@ class Settings(BaseModel):
     workspace_tokens: int = Field(default=500000, ge=0)
     global_tokens: int = Field(default=2000000, ge=0)
     max_jobs: int = Field(default=20, ge=1, le=1000)
+    global_jobs: int = Field(default=100, ge=1, le=1000)
+    max_proposals: int = Field(default=500, ge=20, le=5000)
+    max_runs: int = Field(default=20, ge=1, le=1000)
     max_steps: int = Field(default=45, ge=1, le=100)
     provider_timeout_s: int = Field(default=15, ge=1, le=120)
     max_retries: int = Field(default=2, ge=0, le=3)
@@ -32,6 +35,8 @@ class Settings(BaseModel):
 
     @model_validator(mode="after")
     def validate_environment(self):
+        if ":memory:" in self.database_url:
+            raise ValueError("The workspace platform requires a durable database, not in-memory SQLite")
         if self.mode == "hosted":
             if not self.database_url.startswith("postgresql+psycopg://"):
                 raise ValueError("Hosted mode requires PostgreSQL via psycopg")
@@ -51,3 +56,22 @@ class Settings(BaseModel):
         names = {name: "TOLLGATE_" + name.upper() for name in cls.model_fields}
         names["database_url"] = "DATABASE_URL"
         return cls(**{name: os.environ[key] for name, key in names.items() if key in os.environ})
+
+
+def load_env(path, names=None):
+    """Load the documented settings without printing values; environment wins."""
+    from pathlib import Path
+    path = Path(path)
+    if not path.exists():
+        return
+    allowed = {"TOLLGATE_"+name.upper() for name in Settings.model_fields} | {"DATABASE_URL", "TYPESAFE_API_KEY", "TYPESAFE_BASE_URL",
+               "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "TOLLGATE_OPERATOR_TOKEN", "TOLLGATE_AGENT_MODEL", "TOLLGATE_AUDITOR_TOKEN"}
+    if names is not None:
+        allowed &= set(names)
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.removeprefix("export ").split("=", 1)
+        if key.strip() in allowed and value.strip():
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))

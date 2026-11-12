@@ -174,3 +174,21 @@ def test_postgres_crash_after_dispatch_boundary(platform):
     with p.db.transaction() as c:
         assert row(c,s.intents,wid,intent['id'])['provider_key']==key
         assert c.execute(select(func.count()).select_from(s.receipts).where(s.receipts.c.workspace_id==wid)).scalar_one()==1
+
+
+def test_postgres_lab_arms_and_frozen_policy_fairness(platform):
+    from tollgate.evaluation.lab import create_experiment, experiment_result, save_policy
+    import copy
+    p=platform;owner,wid,mid,cred=setup(p)
+    original=p.list_resources(owner,wid,s.policies)[0]['payload']
+    candidate=copy.deepcopy(original);candidate['name']='All payments require approval';candidate['financial']['auto_limit_cents']=0
+    version=save_policy(p,owner,wid,candidate)
+    e=create_experiment(p,owner,wid,'synthetic-v1','development',[original['id'],version['id']])
+    for _ in range(10):
+        if not Worker(p).tick():break
+    result=experiment_result(p,owner,wid,e['id'])
+    assert result['state']=='completed' and len(result['rows'])==result['manifest']['estimated_rows']==480
+    hard=[r for r in result['rows'] if r['arm']=='hard_constraints:'+version['id'] and r['expected']=='allow']
+    assert hard and all(r['verdict']=='review' for r in hard)
+    with p.db.transaction() as c:
+        assert row(c,s.mandates,wid,mid)['spent_minor']==0 and row(c,s.mandates,wid,mid)['reserved_minor']==0

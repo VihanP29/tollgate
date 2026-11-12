@@ -22,6 +22,15 @@ class ProposalStatus(BaseModel):
     status_url: str
 
 
+class ReceiptView(BaseModel):
+    workspace_id: str
+    id: str
+    proposal_id: str
+    intent_id: str
+    created_at: float
+    payload: dict
+
+
 class TollgateClient:
     def __init__(self, workspace_id, mandate_id, agent_token, base_url="http://127.0.0.1:8765", timeout=15, transport=None):
         self.workspace_id, self.mandate_id = workspace_id, mandate_id

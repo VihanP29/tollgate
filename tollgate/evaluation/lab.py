@@ -1,13 +1,13 @@
 """Frozen experiments and shadows; evaluation workers receive a restricted repository."""
 import copy
 import time
-from sqlalchemy import select
+from sqlalchemy import select, func
 from tollgate.decision_context import DecisionInputV1, identity
 from tollgate.evaluation.datasets import manifest, build_case, validate_manifest
-from tollgate.evaluation.evaluator import evaluate_input, hard_checks, verdict
+from tollgate.evaluation.evaluator import evaluate_input, evaluate_arm, hard_checks, verdict
 from tollgate.evaluation.metrics import summarize
 from tollgate.policy_config import validate
-from tollgate.services.platform import Conflict, new_id
+from tollgate.services.platform import Conflict, QuotaExceeded, new_id
 from tollgate.storage import schema as s
 from tollgate.storage.database import row, change
 
@@ -19,14 +19,16 @@ def create_experiment(platform, actor, wid, dataset_id, split, policy_ids):
         raise ValueError("Invalid dataset/configuration")
     with platform.db.transaction(wid) as c:
         platform.authorize(c, actor, wid, "lab")
+        if c.execute(select(func.count()).select_from(s.experiments).where(s.experiments.c.workspace_id == wid)).scalar_one() >= platform.settings.max_runs:
+            raise QuotaExceeded("Workspace experiment allowance exhausted")
         versions = [row(c, s.policies, wid, pid) for pid in policy_ids]
         cases = [{"metadata": case, "input": build_case(case, wid).model_dump(mode="json")} for case in data["cases"] if case["split"] == split]
-        frozen = {"schema_version": 1, "dataset_id": dataset_id, "dataset_hash": data["manifest_hash"], "split": split,
+        frozen = {"schema_version": 2, "dataset_id": dataset_id, "dataset_hash": data["manifest_hash"], "split": split,
                   "policies": {p["id"]: p["payload"] for p in versions}, "cases": cases,
                   "case_hashes": {case["metadata"]["id"]: identity(case["input"]) for case in cases},
                   "backend": "offline-fixture-checks", "compiler": "studio-1", "contract": "finance-1",
-                  "arms": ["hard_constraints", "general_llm_unavailable"] + ["jev_fixture:"+p["id"] for p in versions],
-                  "estimated_paid_calls": 0, "estimated_rows": len(cases)*(2+len(versions)),
+                  "arms": [backend+":"+p["id"] for p in versions for backend in ["hard_constraints", "general_llm_unavailable", "jev_fixture"]],
+                  "estimated_paid_calls": 0, "estimated_rows": len(cases)*3*len(versions),
                   "admission_eligible": False, "admission_block": "Unreviewed labels and fixture backend; live acceptance remains required"}
         eid = new_id("experiment")
         c.execute(s.experiments.insert().values(workspace_id=wid, id=eid, created_by=actor.actor_id, state="queued",
@@ -90,20 +92,14 @@ class Lab:
                 if self.store.get(s.experiments, wid, eid)["state"] == "cancelled":
                     return
                 value = DecisionInputV1.model_validate(case["input"])
-                hard = hard_checks(value)
-                if arm == "hard_constraints":
-                    result = {"verdict": verdict(hard), "checks": hard, "availability": "intentionally_not_evaluated", "model_calls": 0,
-                              "note": "Experimental ablation; not an operational policy"}
-                elif arm == "general_llm_unavailable":
-                    result = {"verdict": "deny" if verdict(hard) == "deny" else "review", "checks": hard,
-                              "availability": "not_required" if verdict(hard) == "deny" else "unavailable", "model_calls": 0,
-                              "error_code": "general_llm_backend_not_configured"}
-                else:
-                    policy = frozen["policies"][arm.split(":", 1)[1]]
-                    result = evaluate_input(value, policy)
+                backend, _, policy_id = arm.partition(":")
+                policy = frozen["policies"][policy_id or next(iter(frozen["policies"]))]
+                hard = hard_checks(value, policy)
+                result = evaluate_arm(value, policy, backend)
                 result.update(case_id=case["metadata"]["id"], family_id=case["metadata"]["family_id"],
                               expected=case["metadata"]["expected"], adjudication=case["metadata"]["adjudication"],
-                              arm=arm, input_hash=value.input_hash, hard_pass=verdict(hard) != "deny")
+                              arm=arm, candidate_policy_hash=policy["hash"], input_hash=value.input_hash, hard_pass=verdict(hard) != "deny",
+                              end_to_end_ms=round((time.time()-experiment["created_at"])*1000,2), reused_answers=False)
                 self.store.put_result(s.experiment_rows, wid, dict(experiment_id=eid, case_id=result["case_id"], arm=arm, payload=result))
         self.store.experiment_state(wid, eid, "completed")
 
@@ -124,6 +120,8 @@ def subscribe_shadow(platform, actor, wid, policy_id):
     with platform.db.transaction(wid) as c:
         platform.authorize(c, actor, wid, "policy")
         row(c, s.policies, wid, policy_id)
+        if c.execute(select(func.count()).select_from(s.shadows).where(s.shadows.c.workspace_id == wid)).scalar_one() >= 5:
+            raise QuotaExceeded("Workspace shadow subscription limit reached")
         sid = new_id("shadow")
         c.execute(s.shadows.insert().values(workspace_id=wid, id=sid, policy_id=policy_id, enabled=True, created_at=time.time()))
         platform.audit(c, wid, actor.actor_id, "shadow_enabled", sid, {"policy_id": policy_id})
@@ -131,12 +129,14 @@ def subscribe_shadow(platform, actor, wid, policy_id):
 
 
 def save_policy(platform, actor, wid, bundle):
-    bundle = validate(bundle)
     with platform.db.transaction(wid) as c:
         platform.authorize(c, actor, wid, "policy")
+        bundle = validate(bundle)
         existing = row(c, s.policies, wid, bundle["id"], required=False)
         if existing:
             return existing
+        if c.execute(select(func.count()).select_from(s.policies).where(s.policies.c.workspace_id == wid)).scalar_one() >= 100:
+            raise QuotaExceeded("Workspace immutable-policy allowance exhausted")
         c.execute(s.policies.insert().values(workspace_id=wid, id=bundle["id"], content_hash=bundle["hash"], payload=bundle,
                   created_at=time.time(), admission="untested"))
         platform.audit(c, wid, actor.actor_id, "policy_saved", bundle["id"], {"hash": bundle["hash"]})
