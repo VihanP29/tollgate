@@ -222,7 +222,9 @@ class Platform:
         own = c.execute(select(s.reservations).where(s.reservations.c.workspace_id == wid,
               s.reservations.c.proposal_id == proposal["id"], s.reservations.c.state == "active")).mappings().first()
         policy = row(c, s.policies, wid, mandate["policy_id"])["payload"]
-        return DecisionInputV1(workspace_id=wid, mandate_id=mandate["id"], proposal_id=proposal["id"],
+        run_id = c.execute(select(s.runs.c.id).where(s.runs.c.workspace_id == wid,
+            s.runs.c.mandate_id == mandate["id"], s.runs.c.principal_id == proposal["principal_id"])).scalar_one_or_none()
+        return DecisionInputV1(workspace_id=wid, mandate_id=mandate["id"], proposal_id=proposal["id"], run_id=run_id,
             company_namespace=mandate["generation"], action=action, claims=body.claims, evaluation_time=utcnow(),
             authority_json=canonical(authority), policy_json=canonical(policy), policy_hash=policy["hash"],
             sources_json=canonical({"invoices": {iid: approved} if approved else {}, "vendors": vendors,
@@ -589,6 +591,8 @@ class Platform:
             c.execute(s.credentials.update().where(s.credentials.c.workspace_id == wid).values(revoked=True))
             c.execute(s.runs.update().where(s.runs.c.workspace_id == wid,
                 s.runs.c.state.not_in(["finished", "cancelled", "failed"])).values(state="cancelled", revision=s.runs.c.revision + 1))
+            c.execute(s.experiments.update().where(s.experiments.c.workspace_id == wid,
+                s.experiments.c.state.in_(["queued", "running"])).values(state="cancelled"))
             c.execute(s.jobs.update().where(s.jobs.c.workspace_id == wid,
                 s.jobs.c.state.in_(["queued", "running"])).values(cancel_requested=True))
             generation = new_id("synthetic")

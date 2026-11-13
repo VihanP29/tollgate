@@ -12,13 +12,18 @@ from tollgate.storage import schema as s
 from tollgate.storage.database import row, change
 
 
-def create_experiment(platform, actor, wid, dataset_id, split, policy_ids):
+def create_experiment(platform, actor, wid, dataset_id, split, policy_ids, general_judge_config=None):
     data = manifest()
     validate_manifest(data)
     if dataset_id != data["id"] or len(set(policy_ids)) != len(policy_ids):
         raise ValueError("Invalid dataset/configuration")
     with platform.db.transaction(wid) as c:
-        platform.authorize(c, actor, wid, "lab")
+        context = platform.authorize(c, actor, wid, "lab")
+        if general_judge_config is not None:
+            from tollgate.clients.general_judge import GeneralJudgeConfig
+            if context.role not in {"owner","admin"} or platform.settings.mode != "local":
+                raise LookupError("Owner verification is local only")
+            general_judge_config = GeneralJudgeConfig.model_validate(general_judge_config).model_dump(mode="json")
         if c.execute(select(func.count()).select_from(s.experiments).where(s.experiments.c.workspace_id == wid)).scalar_one() >= platform.settings.max_runs:
             raise QuotaExceeded("Workspace experiment allowance exhausted")
         versions = [row(c, s.policies, wid, pid) for pid in policy_ids]
@@ -27,9 +32,15 @@ def create_experiment(platform, actor, wid, dataset_id, split, policy_ids):
                   "policies": {p["id"]: p["payload"] for p in versions}, "cases": cases,
                   "case_hashes": {case["metadata"]["id"]: identity(case["input"]) for case in cases},
                   "backend": "offline-fixture-checks", "compiler": "studio-1", "contract": "finance-1",
-                  "arms": [backend+":"+p["id"] for p in versions for backend in ["hard_constraints", "general_llm_unavailable", "jev_fixture"]],
+                  "arms": [backend+":"+p["id"] for p in versions for backend in ["hard_constraints", "general_llm" if general_judge_config else "general_llm_unavailable", "jev_fixture"]],
                   "estimated_paid_calls": 0, "estimated_rows": len(cases)*3*len(versions),
                   "admission_eligible": False, "admission_block": "Unreviewed labels and fixture backend; live acceptance remains required"}
+        if general_judge_config:
+            frozen.update(schema_version=3,general_judge_config=general_judge_config,backend="mixed-development")
+            frozen["estimated_provider_calls"] = sum(verdict(hard_checks(DecisionInputV1.model_validate(case["input"]),version["payload"])) != "deny"
+                for case in cases for version in versions)
+            frozen["estimated_paid_calls"] = frozen["estimated_provider_calls"]
+            frozen["estimated_token_allowance"] = frozen["estimated_provider_calls"]*general_judge_config["allowance_tokens"]
         eid = new_id("experiment")
         c.execute(s.experiments.insert().values(workspace_id=wid, id=eid, created_by=actor.actor_id, state="queued",
                   manifest_hash=identity(frozen), manifest=frozen, created_at=time.time()))
@@ -42,9 +53,15 @@ def experiment_result(platform, actor, wid, eid):
     with platform.db.transaction() as c:
         platform.authorize(c, actor, wid, "read")
         experiment = row(c, s.experiments, wid, eid)
+        attempts = [dict(r) for r in c.execute(select(s.model_requests).where(s.model_requests.c.workspace_id==wid,
+                    s.model_requests.c.resource_kind=="experiment",s.model_requests.c.resource_id==eid)).mappings()]
         records = [r["payload"] for r in c.execute(select(s.experiment_rows).where(s.experiment_rows.c.workspace_id == wid,
                    s.experiment_rows.c.experiment_id == eid).order_by(s.experiment_rows.c.case_id, s.experiment_rows.c.arm)).mappings()]
-    return {**experiment, "rows": records, "metrics": summarize(records), "completed_rows": len(records), "cost_usd": None}
+    return {**experiment, "rows": records, "metrics": summarize(records), "completed_rows": len(records), "cost_usd": None,
+            "model_usage": {"dispatched_attempts": sum(a["dispatched_at"] is not None for a in attempts),
+                "charged_tokens": sum(a["charged_tokens"] for a in attempts),
+                "reserved_tokens": sum(a["allowance_tokens"] for a in attempts if a["state"] in {"reserved","dispatched"}),
+                "unknown_attempts": sum(a["state"]=="unknown" for a in attempts)}}
 
 
 class EvaluationRepository:
@@ -70,6 +87,11 @@ class EvaluationRepository:
             if not old:
                 c.execute(table.insert().values(workspace_id=wid, id=new_id("result"), **values))
 
+    def has_result(self,wid,eid,case_id,arm):
+        with self.__db.transaction() as c:
+            return c.execute(select(s.experiment_rows.c.id).where(s.experiment_rows.c.workspace_id==wid,
+                s.experiment_rows.c.experiment_id==eid,s.experiment_rows.c.case_id==case_id,s.experiment_rows.c.arm==arm)).first() is not None
+
     def experiment_state(self, wid, eid, state):
         with self.__db.transaction(wid) as c:
             current = row(c, s.experiments, wid, eid)
@@ -78,10 +100,11 @@ class EvaluationRepository:
 
 
 class Lab:
-    def __init__(self, repository):
+    def __init__(self, repository, general_judge=None):
         self.store = repository
+        self.general_judge = general_judge
 
-    def run(self, wid, eid):
+    def run(self, wid, eid, attempt=1):
         experiment = self.store.get(s.experiments, wid, eid)
         if experiment["state"] in {"cancelled", "completed"}:
             return
@@ -91,15 +114,22 @@ class Lab:
             for arm in frozen["arms"]:
                 if self.store.get(s.experiments, wid, eid)["state"] == "cancelled":
                     return
+                if self.store.has_result(wid,eid,case["metadata"]["id"],arm):
+                    continue
                 value = DecisionInputV1.model_validate(case["input"])
                 backend, _, policy_id = arm.partition(":")
                 policy = frozen["policies"][policy_id or next(iter(frozen["policies"]))]
                 hard = hard_checks(value, policy)
-                result = evaluate_arm(value, policy, backend)
+                driver = self.general_judge
+                if driver and driver.config.model_dump(mode="json") != frozen.get("general_judge_config"):
+                    driver = None
+                attempt_context = dict(logical_key=f"{eid}:{case['metadata']['id']}:{policy['id']}",attempt=attempt,
+                                       resource_kind="experiment",resource_id=eid,resume_from_history=True)
+                result = evaluate_arm(value, policy, backend,driver,attempt_context)
                 result.update(case_id=case["metadata"]["id"], family_id=case["metadata"]["family_id"],
                               expected=case["metadata"]["expected"], adjudication=case["metadata"]["adjudication"],
                               arm=arm, candidate_policy_hash=policy["hash"], input_hash=value.input_hash, hard_pass=verdict(hard) != "deny",
-                              end_to_end_ms=round((time.time()-experiment["created_at"])*1000,2), reused_answers=False)
+                              end_to_end_ms=round((time.time()-experiment["created_at"])*1000,2), reused_answers=result.get("reused_answers",False))
                 self.store.put_result(s.experiment_rows, wid, dict(experiment_id=eid, case_id=result["case_id"], arm=arm, payload=result))
         self.store.experiment_state(wid, eid, "completed")
 

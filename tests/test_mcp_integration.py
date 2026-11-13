@@ -12,6 +12,7 @@ import uvicorn
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from tollgate.platform_server import create_app
+from tollgate.decision_context import utcnow
 from tollgate.storage.migrate import upgrade
 from tollgate.settings import Settings
 from tollgate.jobs.worker import Worker
@@ -46,7 +47,7 @@ def test_independent_mcp_handshake_submission_poll_and_revoke(tmp_path):
                         assert names=={'list_approved_invoices','get_approved_invoice','list_permitted_vendors','propose_invoice_payment','get_proposal_status','get_authorized_receipt'}
                         invoices=await session.call_tool('list_approved_invoices',{})
                         assert not invoices.isError
-                        args=dict(request_id='external-run:call1',invoice_id='INV-1042',amount_minor=420000,beneficiary_ref='V-ACME',scheduled_date=date.today().isoformat())
+                        args=dict(request_id='external-run:call1',invoice_id='INV-1042',amount_minor=420000,beneficiary_ref='V-ACME',scheduled_date=utcnow().date().isoformat())
                         result=await session.call_tool('propose_invoice_payment',args)
                         assert not result.isError
                         data=result.structuredContent

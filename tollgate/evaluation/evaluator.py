@@ -89,14 +89,16 @@ def evaluate_input(value: DecisionInputV1, policy=None, backend="offline", clien
                     error_code="semantic_unavailable")
 
 
-def evaluate_arm(value, policy, backend):
+def evaluate_arm(value, policy, backend, general_judge=None, attempt_context=None):
     """Every comparison arm uses the identical captured state and candidate hard controls."""
     hard = hard_checks(value, policy)
     if backend == "hard_constraints":
         return {"verdict": verdict(hard), "checks": hard, "availability": "intentionally_not_evaluated",
                 "model_calls": 0, "usage": {}, "provider_latency_ms": None,
                 "note": "Experimental ablation; not an operational policy"}
-    if backend == "general_llm_unavailable":
+    if backend == "general_llm" and general_judge is not None:
+        return general_judge.evaluate(value,policy,**attempt_context)
+    if backend in {"general_llm_unavailable", "general_llm"}:
         checks = hard if verdict(hard) == "deny" else hard + [dict(id="classifier_available", kind="semantic",
                   outcome="unavailable", label="General LLM backend unavailable", detail="No model attempt; operational hold only")]
         return {"verdict": verdict(checks), "checks": checks, "availability": "not_required" if verdict(hard) == "deny" else "unavailable",

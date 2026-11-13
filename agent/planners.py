@@ -103,9 +103,10 @@ class ClaudePlanner:
     name = "claude"
     model = "claude-opus-5-5"
 
-    def __init__(self, client=None):
+    def __init__(self, client=None, system_prompt: str | None = None):
         import anthropic
         self.client = client or anthropic.Anthropic()
+        self.system_prompt = system_prompt or SYSTEM_PROMPT
 
     def start(self, operator_request: str) -> None:
         self.messages = [{"role": "user", "content": operator_request}]
@@ -117,7 +118,7 @@ class ClaudePlanner:
             self.messages.append({"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": o.id, "content": o.content, "is_error": o.is_error}
                 for o in outcomes]})
-        resp = self.client.messages.create(model=self.model, max_tokens=16000, system=SYSTEM_PROMPT,
+        resp = self.client.messages.create(model=self.model, max_tokens=16000, system=self.system_prompt,
                                            tools=TOOL_SCHEMAS, messages=self.messages)
         self.stop_reason = resp.stop_reason
         if resp.stop_reason == "refusal":

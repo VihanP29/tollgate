@@ -41,7 +41,7 @@ class Database:
     def ready(self):
         with self.engine.connect() as connection:
             revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            return revision == "0003_lab_arms"
+            return revision == "0004_model_usage"
 
     def dispose(self):
         self.engine.dispose()

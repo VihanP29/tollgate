@@ -22,6 +22,7 @@ class Settings(BaseModel):
     global_calls: int = Field(default=1000, ge=0, le=1000000)
     workspace_tokens: int = Field(default=500000, ge=0)
     global_tokens: int = Field(default=2000000, ge=0)
+    evaluation_usage_fraction: float = Field(default=0.2, ge=0, le=0.5)
     max_jobs: int = Field(default=20, ge=1, le=1000)
     global_jobs: int = Field(default=100, ge=1, le=1000)
     max_proposals: int = Field(default=500, ge=20, le=5000)

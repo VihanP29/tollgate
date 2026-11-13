@@ -86,7 +86,9 @@ jobs = owned("jobs", C("kind", S(30), nullable=False), C("logical_key", S(240), 
              C("last_error", S(100)), C("created_at", Float, nullable=False), UQ("workspace_id", "logical_key"))
 workers = Table("workers", metadata, C("id", S(120), primary_key=True), C("heartbeat_at", Float, nullable=False))
 usage = Table("usage_counters", metadata, C("scope", S(120), primary_key=True), C("calls", B, nullable=False),
-              C("tokens", B, nullable=False))
+              C("tokens", B, nullable=False),
+              C("reserved_calls", B, nullable=False, server_default="0"), C("reserved_tokens", B, nullable=False, server_default="0"),
+              CK("calls >= 0 AND tokens >= 0 AND reserved_calls >= 0 AND reserved_tokens >= 0", name="nonnegative_usage"))
 audit = owned("audit_events", C("actor_id", S(200), nullable=False), C("kind", S(100), nullable=False),
               C("resource_id", S(120), nullable=False), C("correlation_id", S(120), nullable=False), C("created_at", Float, nullable=False),
               C("payload_hash", S(64), nullable=False), C("payload", JSON, nullable=False))
@@ -107,3 +109,14 @@ runs = owned("agent_runs", C("mandate_id", S(120), nullable=False), C("principal
              C("request_id", S(120), nullable=False), C("state", S(30), nullable=False), C("revision", I, nullable=False),
              C("step", I, nullable=False), C("created_at", Float, nullable=False), C("payload", JSON, nullable=False),
              ref("mandate_id", "mandates"), UQ("workspace_id", "mandate_id", "request_id"))
+
+model_requests = owned("model_requests", C("logical_key", S(240), nullable=False), C("attempt", I, nullable=False),
+    C("resource_kind", S(30), nullable=False), C("resource_id", S(120), nullable=False), C("pool", S(20), nullable=False),
+    C("backend", S(80), nullable=False), C("requested_model", S(120), nullable=False), C("resolved_model", S(120)),
+    C("request_hash", S(64), nullable=False), C("request_payload", JSON, nullable=False), C("allowance_tokens", B, nullable=False),
+    C("state", S(30), nullable=False), C("created_at", Float, nullable=False), C("deadline", Float, nullable=False), C("timeout_s", Float, nullable=False),
+    C("dispatched_at", Float), C("charged_tokens", B, nullable=False), C("usage", JSON),
+    C("response_hash", S(64)), C("response", JSON), C("error_code", S(80)),
+    UQ("workspace_id", "logical_key", "attempt"), CK("attempt > 0 AND allowance_tokens > 0 AND charged_tokens >= 0", name="valid_usage"))
+model_usage_events = owned("model_usage_events", C("request_id", S(120), nullable=False), C("kind", S(30), nullable=False),
+    C("created_at", Float, nullable=False), C("payload", JSON, nullable=False), ref("request_id", "model_requests"))

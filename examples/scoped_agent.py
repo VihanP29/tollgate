@@ -4,9 +4,8 @@ Run: python -m examples.scoped_agent
 A caller-owned stable run key is mandatory; never generate a new key after a timeout.
 """
 import os
-from datetime import date
 from tollgate.client import TollgateClient
-from tollgate.decision_context import Payment
+from tollgate.decision_context import Payment, utcnow
 
 
 def main():
@@ -15,7 +14,7 @@ def main():
         run_key = os.environ["TOLLGATE_RUN_KEY"]
         for invoice in client.invoices():
             proposal = client.submit(run_key+":"+invoice["id"], Payment(invoice_id=invoice["id"],
-                amount_minor=invoice["amount_minor"], beneficiary_ref=invoice["beneficiary_ref"], scheduled_date=date.today()))
+                amount_minor=invoice["amount_minor"], beneficiary_ref=invoice["beneficiary_ref"], scheduled_date=utcnow().date()))
             result = client.wait(proposal.id)
             print(invoice["id"], result.state, result.reason_codes)
             # Continue past exceptions; reconnect with get()/wait() using the saved proposal ID.

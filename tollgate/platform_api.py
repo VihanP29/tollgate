@@ -361,6 +361,22 @@ def install(app, platform):
             return {"schema_version": 1, "events": records, "next_after": records[-1]["created_at"] if records else None,
                     "integrity": "Content hashes identify payloads; no signature or independent anchoring"}
 
+    @app.get(prefix + "/model-usage")
+    def model_usage(wid: str,p=Depends(principal)):
+        from tollgate.services.model_usage import ModelUsage
+        with platform.db.transaction() as c:
+            platform.authorize(c,p,wid,"read")
+        return ModelUsage(platform.db,platform.settings).summary(wid)
+
+    @app.get(prefix + "/model-usage/{rid}")
+    def model_attempt(wid: str,rid: str,p=Depends(principal)):
+        with platform.db.transaction() as c:
+            platform.authorize(c,p,wid,"read")
+            attempt=row(c,s.model_requests,wid,rid)
+            events=[dict(r) for r in c.execute(select(s.model_usage_events).where(s.model_usage_events.c.workspace_id==wid,
+                    s.model_usage_events.c.request_id==rid).order_by(s.model_usage_events.c.created_at)).mappings()]
+            return {**attempt,"events":events}
+
     @app.get(prefix + "/operations")
     def operations(wid: str, p=Depends(principal)):
         with platform.db.transaction() as c:

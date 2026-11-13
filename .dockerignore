@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+.env.*
+.runtime
+__pycache__
+.pytest_cache
+*.sqlite
+*.db
+*.log
+dist
+build
+docs
+improvements.md

@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select, func
 from tollgate.auth import Principal
 from tollgate.authorization import AuthorizationGateway, AuditStore, Proposal
-from tollgate.decision_context import ProposalV1, Payment, DecisionInputV1, ExecutorOutcome, identity
+from tollgate.decision_context import ProposalV1, Payment, DecisionInputV1, ExecutorOutcome, identity, utcnow
 from tollgate.evaluation.datasets import manifest, build_case, validate_manifest
 from tollgate.evaluation.evaluator import semantic_state, compiled_request, request_identity, evaluate_input
 from tollgate.evaluation.lab import (create_experiment, experiment_result, save_policy, subscribe_shadow,
@@ -48,7 +48,7 @@ def setup(p, actor=None, invoices=None, **limits):
 
 def payment(request='test', iid='INV-1042', amount=420000, vendor='V-ACME'):
     return ProposalV1(request_id=request, action=Payment(invoice_id=iid, amount_minor=amount,
-                       beneficiary_ref=vendor, scheduled_date=date.today()))
+                       beneficiary_ref=vendor, scheduled_date=utcnow().date()))
 
 
 def drain(p, limit=50, executor=None):
@@ -364,7 +364,7 @@ def test_explicit_legacy_import_dry_run_idempotence_and_failure(platform, tmp_pa
     path = tmp_path/'legacy.sqlite'
     g = AuthorizationGateway(store=AuditStore(str(path)))
     session, token = g.create()
-    event = g.submit(session.session_id, Proposal(tool='schedule_payment', args=dict(vendor_id='V-ACME',amount_usd=4200,date=date.today().isoformat(),memo='INV-1042')), token)
+    event = g.submit(session.session_id, Proposal(tool='schedule_payment', args=dict(vendor_id='V-ACME',amount_usd=4200,date=utcnow().date().isoformat(),memo='INV-1042')), token)
     assert event.execution == 'executed'
     before = path.read_bytes()
     report = import_legacy(platform.db, path, wid)
@@ -540,3 +540,52 @@ def test_failed_legacy_import_rolls_back_prior_archives(platform,tmp_path):
     assert count(platform,s.legacy,wid)==0 and path.read_bytes()==before
     with g.store.db:g.store.db.execute("DELETE FROM control_history WHERE kind='invalid_fixture'")
     assert import_legacy(platform.db,path,wid,True)['new_archives']==2
+
+
+def test_expired_authority_releases_review_and_stops_waiting_run(platform):
+    owner,wid,mid,agent,_=setup(platform,auto=0)
+    start_run(platform,owner,wid,mid,'expires-during-review')
+    drain(platform)
+    assert platform.list_resources(owner,wid,s.runs)[0]['state']=='waiting_for_review'
+    with platform.db.transaction(wid) as c:
+        change(c,s.mandates,wid,mid,expires_at=time.time()-1)
+    drain(platform)
+    assert platform.list_resources(owner,wid,s.runs)[0]['state']=='cancelled'
+    assert all(r['state']=='expired' for r in platform.list_resources(owner,wid,s.reviews))
+    with platform.db.transaction() as c:
+        assert row(c,s.mandates,wid,mid)['reserved_minor']==0
+        assert all(r['payload']['run_id'] for r in c.execute(select(s.inputs).where(s.inputs.c.workspace_id==wid)).mappings())
+    assert count(platform,s.receipts,wid)==0
+
+
+def test_crash_attempt_exhaustion_holds_evaluating_proposal(platform):
+    owner,wid,mid,agent,_=setup(platform)
+    result=platform.submit(agent,wid,mid,payment())
+    worker=Worker(platform)
+    claimed=worker.claim()
+    with platform.db.transaction(wid) as c:
+        change(c,s.jobs,wid,claimed['id'],attempts=platform.settings.max_retries+1,lease_until=time.time()-1)
+    assert worker.tick()
+    assert platform.proposal(agent,wid,result['id'])['state']=='held'
+    with platform.db.transaction() as c:
+        assert row(c,s.jobs,wid,claimed['id'])['last_error']=='attempt_limit_recovered'
+    assert count(platform,s.receipts,wid)==0
+
+
+def test_crash_attempt_exhaustion_keeps_ambiguous_execution_reserved(platform):
+    owner,wid,mid,agent,_=setup(platform)
+    result=platform.submit(agent,wid,mid,payment())
+    worker=Worker(platform);worker.tick()
+    claimed=worker.claim()
+    with platform.db.transaction(wid) as c:
+        intent=row(c,s.intents,wid,claimed['object_id'])
+        change(c,s.intents,wid,intent['id'],state='dispatching',dispatched_at=time.time())
+        change(c,s.proposals,wid,result['id'],state='dispatching')
+        change(c,s.jobs,wid,claimed['id'],attempts=platform.settings.max_retries+1,lease_until=time.time()-1)
+    worker.tick()
+    assert platform.proposal(agent,wid,result['id'])['state']=='unknown'
+    with platform.db.transaction() as c:
+        assert row(c,s.mandates,wid,mid)['reserved_minor']==420000
+    platform.revoke_mandate(owner,wid,mid)
+    assert platform.proposal(owner,wid,result['id'])['state']=='unknown'
+    assert count(platform,s.receipts,wid)==0

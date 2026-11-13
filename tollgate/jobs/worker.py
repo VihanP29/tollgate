@@ -7,6 +7,7 @@ from pathlib import Path
 from sqlalchemy import select, or_, and_, func
 from tollgate.decision_context import DecisionInputV1
 from tollgate.services.execution import ExecutionService
+from tollgate.services.maintenance import expire_authority, finish_exhausted_job, recover_exhausted_jobs
 from tollgate.services.platform import Platform, new_id
 from tollgate.storage.database import Database, row, change
 from tollgate.storage import schema as s
@@ -14,8 +15,9 @@ from tollgate.settings import Settings
 
 
 class Worker:
-    def __init__(self, platform, executor=None, worker_id=None):
+    def __init__(self, platform, executor=None, worker_id=None, general_judge=None):
         self.platform = platform
+        self.general_judge = general_judge
         self.db = platform.db
         self.execution = ExecutionService(platform, executor)
         self.id = worker_id or new_id("worker")
@@ -53,10 +55,10 @@ class Worker:
             job = dict(job)
             if job["cancel_requested"]:
                 change(c, s.jobs, job["workspace_id"], job["id"], state="cancelled")
-                return None
+                return {**job, "skip": True}
             if job["attempts"] >= self.platform.settings.max_retries + 1:
                 change(c, s.jobs, job["workspace_id"], job["id"], state="failed", last_error="attempt_limit")
-                return None
+                return {**job, "skip": True}
             change(c, s.jobs, job["workspace_id"], job["id"], state="running", attempts=job["attempts"] + 1,
                    lease_owner=self.id, lease_until=now + self.platform.settings.lease_seconds)
             job.update(lease_owner=self.id, attempts=job["attempts"] + 1)
@@ -64,10 +66,17 @@ class Worker:
 
     def tick(self):
         from tollgate.services.runs import wake_runs
+        from tollgate.services.model_usage import ModelUsage
+        maintained = ModelUsage(self.db,self.platform.settings).recover()
+        maintained |= expire_authority(self.platform)
+        maintained |= recover_exhausted_jobs(self.platform)
         wake_runs(self.platform)
         job = self.claim()
         if not job:
-            return False
+            return maintained
+        if job.get("skip"):
+            recover_exhausted_jobs(self.platform)
+            return True
         wid = job["workspace_id"]
         try:
             if job["kind"] == "evaluate":
@@ -76,9 +85,9 @@ class Worker:
                 self.execution.execute(wid, job["object_id"])
             elif job["kind"] in {"experiment", "shadow"}:
                 from tollgate.evaluation.lab import Lab, EvaluationRepository
-                lab = Lab(EvaluationRepository(self.db))
+                lab = Lab(EvaluationRepository(self.db),self.general_judge)
                 if job["kind"] == "experiment":
-                    lab.run(wid, job["object_id"])
+                    lab.run(wid, job["object_id"],attempt=job["attempts"])
                 else:
                     lab.shadow(wid, job)
             elif job["kind"] == "run":
@@ -100,21 +109,8 @@ class Worker:
                     exhausted = current["attempts"] >= self.platform.settings.max_retries + 1
                     change(c, s.jobs, wid, job["id"], state="failed" if exhausted else "queued", lease_until=None,
                            available_at=time.time()+min(30, 2**current["attempts"]), last_error=error_code)
-                    if exhausted and job["kind"] == "evaluate":
-                        proposal = row(c, s.proposals, wid, job["object_id"])
-                        if proposal["state"] == "evaluating":
-                            change(c, s.proposals, wid, proposal["id"], state="held", verdict="review", checks=[dict(
-                                id="evaluation_job_failed", kind="semantic", outcome="unavailable", label="Evaluation worker failed",
-                                detail="Bounded job retries exhausted; inspect jobs and explicitly reassess")])
-                    elif exhausted and job["kind"] == "experiment":
-                        experiment = row(c, s.experiments, wid, job["object_id"])
-                        if experiment["state"] != "cancelled":
-                            change(c, s.experiments, wid, experiment["id"], state="partial_failure")
-                    elif exhausted and job["kind"] == "execute":
-                        intent = row(c, s.intents, wid, job["object_id"])
-                        if intent["state"] in {"dispatching", "submitted"}:
-                            change(c, s.intents, wid, intent["id"], state="unknown", last_error="worker_recovery_required")
-                            change(c, s.proposals, wid, intent["proposal_id"], state="unknown")
+                    if exhausted:
+                        finish_exhausted_job(self.platform, c, wid, job)
                     self.platform.audit(c, wid, "service:worker", "job_failed", job["id"], {"exhausted": exhausted})
             return True
 
