@@ -16,6 +16,12 @@ This is a local prototype with synthetic data and a mock financial executor. It 
 - A Policy Studio for editing financial limits, Jev question instructions and criteria, decision rules, and Choice routing. It can compare a draft against a saved policy, inspect the compiled Jev request, save versions, and activate a tested version for new mandates.
 - A deterministic scripted rehearsal and an optional live Claude agent. Adversarial challenge probes use the same authorization gateway and are labeled separately.
 
+## Public preview
+
+[Open the public Tollgate preview](https://tollgate-agent-demo.vihanp29.chatgpt.site). It uses synthetic data and simulated decisions. The complete local application and workspace platform are described below.
+
+The preview files are in `dist/`, and `.openai/hosting.json` identifies the existing Sites project. `dist/` remains an ignored local build artifact, so cloning the application repository alone does not include that preview. Editing these local files does not publish a new version automatically.
+
 ## Run locally
 
 Requirements: Python 3.12 or newer. From the project root:
